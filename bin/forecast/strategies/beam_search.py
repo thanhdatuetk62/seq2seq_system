@@ -2,54 +2,42 @@ import torch
 from torch import nn
 
 class BeamSearch(nn.Module):
-    def __init__(self, e_out, N, sos_token, eos_token, k=4, max_len=160):
+    def __init__(self, sos_token, eos_token, k=4, max_len=160):
         """
         A Simple Beam Search implementation
         Constructor Args:
-            e_out (Dict[str, Tensor]) - A dictionary contains some useful \
-                tensors for feeding into the Decoder
-            N (int): Batch size
-            [sos, eos]_token (int) - Index of "<sos>" and "<eos>" token
+            [sos/eos]_token (int) - Index of "<sos>" and "<eos>" token
             k (int) - Beam size
             max_len (int) - Maximum number of time steps for generating output
         """
         super().__init__()
-
         # Memorize some useful scalars
-        self.N = N
         self.k = k
         self.max_len = max_len
         self.sos_token = sos_token
         self.eos_token = eos_token
 
         # Hypothesises for searching
-        sents = torch.zeros(self.N, k, max_len).long()
-        sents[:, :, 0] = sos_token
+        sent = torch.zeros(1, k, max_len).long()
+        sent[:, :, 0] = sos_token
 
         # Log scores of beams
-        scores = torch.zeros((self.N, k), dtype=torch.float)
-
-        # Indices of un-terminated batches
-        q = torch.arange(self.N).long()
+        score = torch.zeros((1, k), dtype=torch.float)
 
         # Mask of finished batches
-        done = torch.zeros(self.N, dtype=torch.int)
+        is_done = torch.zeros(1, dtype=torch.int)
 
         # Create mask for checking eos
         sent_eos = torch.tensor([eos_token] * k).unsqueeze(0)
-
-        # Register to buffer
-        vars_register = [("sents", sents), ("scores", scores), ("q", q),
-            ("done", done), ("sent_eos", sent_eos)]
-        for name, val in vars_register:
-            self.register_buffer(name, val)
         
-        # Prepare encoder outputs
-        self.e_out = e_out
-        self.repeat_interleave_keys()
+        # Register to buffer
+        vars_register = [("sent", sent), ("score", score),
+            ("is_done", is_done), ("sent_eos", sent_eos)]
+        for name, val in vars_register:
+            self.register_buffer(name, val, persistent=False)
 
     def repeat_interleave_keys(self):
-        self.e_outs = {}
+        e_outs = {}
         for key, value in self.e_out.items():
             # Check value type and format
             if not isinstance(value, torch.Tensor):
@@ -57,10 +45,28 @@ class BeamSearch(nn.Module):
 {} instead!".format(key, type(value)))
             # Be sure batch size if consistent with initial batch
             assert value.size(0) == self.N
-            self.e_outs[key] = torch.repeat_interleave(\
-                value[self.q], self.k, dim=0)
+            e_outs[key] = torch.repeat_interleave(value[self.q], self.k, dim=0)
+        return e_outs
 
-    def queries(self):
+    def queries(self, e_out, N):
+        """
+        Create sort of queries which will be sent to the model for getting
+        score distribution.
+        Arguments:
+            e_out: (Dict[str, Tensor]) - Encoder info from the model
+            N: (int) - current batch size
+        return:
+            An Iterator object contains queries
+        """
+        # Scale-up attributes to batch size (N), they change after each batch
+        self.q = torch.arange(N).long()
+        self.N = N
+        self.sents = self.sent.repeat(N, 1, 1)
+        self.scores = self.score.repeat(N, 1)
+        self.are_done = self.is_done.repeat(N)
+        self.e_out = e_out
+        self.e_outs = self.repeat_interleave_keys()
+        # Iterable object start here
         for cur_len in range(1, self.max_len):
             # All beams from all batches terminated, early stopping process
             if len(self.q) == 0:
@@ -82,7 +88,6 @@ class BeamSearch(nn.Module):
                 m = n * k   (if t > 0)
                 m = N       (if t = 0) 
         """
-
         n, k, q, eos_token = len(self.q), self.k, self.q, self.eos_token
         sents, scores, sent_eos = self.sents, self.scores, self.sent_eos
 
@@ -127,9 +132,9 @@ class BeamSearch(nn.Module):
 
         # update which sentences finished all its beams
         mask = (sents[:, :, t+1] == sent_eos).all(1).view(-1)
-        self.done.masked_fill_(mask, 1)
-        self.q = torch.nonzero(self.done == 0).view(-1)
-        self.repeat_interleave_keys()
+        self.are_done.masked_fill_(mask, 1)
+        self.q = torch.nonzero(self.are_done == 0).view(-1)
+        self.e_outs = self.repeat_interleave_keys()
         
     def top(self):
         """

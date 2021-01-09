@@ -83,14 +83,15 @@ class TransformerNMT(_Model):
 
         return {"memory": memory}
 
-    def train_step(self, src, trg):
+    def train_step(self, src, trg, loss_metric):
         """
         Compute loss for each train step
         Arguments:
             src: (Tensor [N x S]) - Input to Encoder
             trg: (Tensor [N x T]) - Input to Decoder
+            loss_metric: (callable) - A Loss function
         Return:
-            Scalar (float) - Batch's loss value 
+            Output of the loss function
         """
         self.train()
 
@@ -103,18 +104,11 @@ class TransformerNMT(_Model):
         ys = trg[:, 1:].contiguous().view(-1)
 
         # Feed inputs into loss metric
-        loss = self.loss_metric(preds, ys)
-        loss_val = loss.item()
-
-        # Back-propagation
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-        return loss_val
+        loss = loss_metric(preds, ys)
+        return loss
 
     @torch.no_grad()
-    def validate_step(self, src, trg):
+    def validate_step(self, src, trg, loss_metric):
         """
         Compute loss for each validate step
         Arguments:
@@ -134,7 +128,7 @@ class TransformerNMT(_Model):
         ys = trg[:, 1:].contiguous().view(-1)
 
         # Feed inputs into loss metric
-        loss = self.loss_metric(preds, ys)
+        loss = loss_metric(preds, ys)
         loss_val = loss.item()
 
         return loss_val

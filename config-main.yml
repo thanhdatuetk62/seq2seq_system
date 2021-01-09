@@ -1,27 +1,26 @@
 data_kwargs:
-    dataset: translation
+  dataset: translation
 
-    train_ds_kwargs:
-      src_path: ../data/iwslt_en_vi/train.en
-      trg_path: ../data/iwslt_en_vi/train.vi 
-      src_max_len: 100
-      trg_max_len: 100  
+  train_ds_kwargs:
+    src_path: ../data/iwslt_en_vi/train.en
+    trg_path: ../data/iwslt_en_vi/train.vi 
+    src_max_len: 100
+    trg_max_len: 100  
 
-    valid_ds_kwargs:
-      src_path: ../data/iwslt_en_vi/tst2013.en
-      trg_path: ../data/iwslt_en_vi/tst2013.vi
+  valid_ds_kwargs:
+    src_path: ../data/iwslt_en_vi/tst2013.en
+    trg_path: ../data/iwslt_en_vi/tst2013.vi
 
-    train_batch_sz: 32
-    valid_batch_sz: 32
+  train_batch_sz: 32
+  valid_batch_sz: 32
 
-    src_vocab_min_freq: 5
-    trg_vocab_min_freq: 5
-    # src_max_size: 8000
-    # trg_max_size: 8000
+  src_vocab_min_freq: 2
+  trg_vocab_min_freq: 2
+  # src_max_size: 8000
+  # trg_max_size: 8000
 
 
 model: transformer_nmt
-
 model_kwargs:
   # Architecture config
   d_model: 512
@@ -60,14 +59,13 @@ train_config:
   save_checkpoint_epochs: 1
 
   eval_metric: bleu
-  eval_config:
-    forecast_strategy: beam_search
-    strategy_kwargs:
-      k: 4
-      max_len: 160
+  strategy: beam_search
+  strategy_kwargs:
+    k: 4
+    max_len: 160
 
 infer_config:
-  forecast_strategy: beam_search
+  strategy: beam_search
   batch_size: 32
   strategy_kwargs:
     k: 4

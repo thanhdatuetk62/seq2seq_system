@@ -79,6 +79,12 @@ class DataController(object):
     def create_iterator(self, ds, batch_size=32, train=True, device="cpu"):
         return BucketIterator(ds, batch_size, train=train, sort=False, device=device)
 
+    def convert_to_str(self, sent_id):
+        eos_token = self.trg_vocab.stoi["<eos>"]
+        eos = torch.nonzero(sent_id == eos_token).view(-1)
+        t = eos[0] if len(eos) > 0 else len(sent_id)
+        return [self.trg_vocab.itos[j] for j in sent_id[1: t]]
+
     def state_dict(self):
         return {
             "src_vocab": self.src_vocab,
