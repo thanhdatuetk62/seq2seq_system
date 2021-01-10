@@ -1,10 +1,11 @@
+import math
 from torch import nn
 from torch.nn import functional as F
 import torch
 
 from .model import _Model
 
-from ..modules import PositionalEncoding
+from ..modules import PositionalEncoding, Encoder, Decoder
 from ..utils import generate_subsequent_mask
 
 
@@ -25,17 +26,21 @@ class TransformerNMT(_Model):
                                      d_model=d_model, dropout=dropout)
 
         # Transformer module
-        self.transformer = nn.Transformer(d_model=d_model, nhead=nhead,
-                                          num_encoder_layers=num_encoder_layers,
-                                          num_decoder_layers=num_decoder_layers,
-                                          dim_feedforward=dim_ff,
-                                          dropout=dropout,
-                                          activation=activation)
+        self.encoder = Encoder(num_encoder_layers, d_model, nhead, dropout, \
+            activation, dim_ff)
+        self.decoder = Decoder(num_decoder_layers, d_model, nhead, dropout, \
+            activation, dim_ff)
+        # self.transformer = nn.Transformer(d_model=d_model, nhead=nhead,
+        #                                   num_encoder_layers=num_encoder_layers,
+        #                                   num_decoder_layers=num_decoder_layers,
+        #                                   dim_feedforward=dim_ff,
+        #                                   dropout=dropout,
+        #                                   activation=activation)
                                     
         # Create ff network for output probabilities
         self.out = nn.Linear(d_model, self.trg_vocab_size)
 
-    def forward(self, src, trg, src_mask=None, trg_mask=None):
+    def forward(self, src, trg, src_mask=None, memory_mask=None, trg_mask=None):
         """
         Forward step for training batch (include source and target batch)
         Arguments:
@@ -47,20 +52,21 @@ class TransformerNMT(_Model):
             (Tensor [N x T x trg_vocab_size]) - Score distributions
         """
         # Embedding source tokens
-        src = self.src_embed(src)
+        src = self.src_embed(src) * math.sqrt(self.d_model)
         src = self.pe(src)
 
         # Embedding target tokens
-        trg = self.trg_embed(trg)
+        trg = self.trg_embed(trg) * math.sqrt(self.d_model)
         trg = self.pe(trg)
 
         # transpose batch <-> len dim for using built-in transformer module
-        output = self.transformer(src.transpose(0, 1),
-                                  trg.transpose(0, 1),
-                                  src_mask=src_mask,
-                                  tgt_mask=trg_mask).transpose(0, 1)
+        memory = self.encoder(src, src_mask)
+        output = self.decoder(trg, memory, memory_mask, trg_mask)
+        # output = self.transformer(src.transpose(0, 1),
+        #                           trg.transpose(0, 1),
+        #                           src_mask=src_mask,
+        #                           tgt_mask=trg_mask).transpose(0, 1)
         output = self.out(output)
-
         return output
 
     def e_out(self, src, src_mask=None):
@@ -74,12 +80,13 @@ class TransformerNMT(_Model):
             (Dict[str, Tensor]) - A dictionary contains all information.
         """
         # Embedding source tokens
-        src = self.src_embed(src)
+        src = self.src_embed(src) * math.sqrt(self.d_model)
         src = self.pe(src)
 
         # transpose batch <-> len dim for using built-in transformer module
-        memory = self.transformer.encoder(src.transpose(0, 1), src_mask).\
-            transpose(0, 1)
+        # memory = self.transformer.encoder(src.transpose(0, 1), src_mask).\
+        #     transpose(0, 1)
+        memory = self.encoder(src, src_mask=src_mask)
 
         return {"memory": memory}
 
@@ -156,10 +163,11 @@ class TransformerNMT(_Model):
 
         # Transformer output
         trg_mask = generate_subsequent_mask(T, self.device)
-        output = self.transformer.decoder(trg.transpose(0, 1),
-                                          memory.transpose(0, 1),
-                                          tgt_mask=trg_mask,
-                                          memory_mask=memory_mask).transpose(0, 1)
+        # output = self.transformer.decoder(trg.transpose(0, 1),
+        #                                   memory.transpose(0, 1),
+        #                                   tgt_mask=trg_mask,
+        #                                   memory_mask=memory_mask).transpose(0, 1)
+        output = self.decoder(trg, memory, memory_mask, trg_mask)
         output = self.out(output)
 
         # prob distributions [N x cur_len x trg_vocab_size]
