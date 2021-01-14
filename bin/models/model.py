@@ -1,5 +1,5 @@
 from torch import nn
-
+import torch
 
 class _Model(nn.Module):
     def __init__(self, data, device="cpu"):
@@ -14,8 +14,9 @@ class _Model(nn.Module):
         print("Source vocab size: ", self.src_vocab_size)
         print("Target vocab size: ", self.trg_vocab_size)
 
+    @torch.jit.ignore
     def init_params(self):
-        print("Initialize model parameters ...", end="")
+        print("Initialize model parameters ...")
         for p in self.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)

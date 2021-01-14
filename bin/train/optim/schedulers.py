@@ -14,6 +14,10 @@ class NoamScheduler(object):
         self._step_count = 0
         self.scalar = scalar
 
+    @property
+    def param_groups(self):
+        return self.optimizer.param_groups
+
     @torch.no_grad()
     def step(self):
         """
@@ -26,8 +30,8 @@ class NoamScheduler(object):
                     self.warmup_steps ** -1.5))
         self.optimizer.step()
     
-    def zero_grad(self):
-        self.optimizer.zero_grad()
+    def zero_grad(self, **kwargs):
+        self.optimizer.zero_grad(**kwargs)
 
     def state_dict(self):
         return {

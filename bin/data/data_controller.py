@@ -16,6 +16,7 @@ class DataController(object):
                        device="cpu", **kwargs):
 
         self.save_dir = save_dir
+        self.device = device
         # Initialize source and target fields
         self.src_field = Field(batch_first=True)
         self.trg_field = Field(batch_first=True, init_token="<sos>", \
@@ -68,13 +69,13 @@ class DataController(object):
             self.src_field.vocab = self.src_vocab
             self.trg_field.vocab = self.trg_vocab
     
-    def create_infer_iter(self, src_sents, batch_size=32, device="cpu"):
+    def create_infer_iter(self, src_sents, batch_size=32):
         """
         Create iterator for inference
         """
         for i in range(0, len(src_sents), batch_size):
             batch = src_sents[i: i+batch_size]
-            yield self.src_field.process(batch, device=device)
+            yield self.src_field.process(batch, device=self.device)
 
     def create_iterator(self, ds, batch_size=32, train=True, device="cpu"):
         return BucketIterator(ds, batch_size, train=train, sort=False, device=device)

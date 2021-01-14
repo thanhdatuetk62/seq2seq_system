@@ -1,28 +1,8 @@
-data_kwargs:
-  dataset: translation
-
-model: transformer_nmt
-model_kwargs:
-  # Architecture config
-  d_model: 512
-  nhead: 8
-  num_encoder_layers: 6
-  num_decoder_layers: 6
-  dim_ff: 2048
-  dropout: 0.1
-  activation: relu
-  max_input_length: 300
-
-infer_config:
-  forecast_strategy: beam_search
-  batch_size: 32
-  strategy_kwargs:
-    k: 4
-    max_len: 160
+model_path: serving/models/compiled_model.pt
   
 server_config:
   host: 0.0.0.0
-  port: 1710
-  debug: true
+  port: 2703
+  debug: false
 
 device: cuda

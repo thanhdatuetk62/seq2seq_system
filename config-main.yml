@@ -4,15 +4,15 @@ data_kwargs:
   train_ds_kwargs:
     src_path: ../data/iwslt_en_vi/train.en
     trg_path: ../data/iwslt_en_vi/train.vi 
-    src_max_len: 100
-    trg_max_len: 100  
+    src_max_len: 64
+    trg_max_len: 64
 
   valid_ds_kwargs:
     src_path: ../data/iwslt_en_vi/tst2013.en
     trg_path: ../data/iwslt_en_vi/tst2013.vi
 
-  train_batch_sz: 32
-  valid_batch_sz: 32
+  train_batch_sz: 64
+  valid_batch_sz: 64
 
   src_vocab_min_freq: 2
   trg_vocab_min_freq: 2
@@ -30,7 +30,7 @@ model_kwargs:
   dim_ff: 2048
   dropout: 0.1
   activation: relu
-  max_input_length: 300
+  max_input_length: 200
   
 
 # Config for training
@@ -53,10 +53,10 @@ train_config:
     label_smoothing: 0.1
 
   n_epochs: 50
-  report_steps: 200
+  report_steps: 500
   valid_epochs: 1
   eval_epochs: 1
-  save_checkpoint_epochs: 1
+  save_checkpoint_epochs: 3
 
   eval_metric: bleu
   strategy: beam_search

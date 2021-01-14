@@ -1,11 +1,11 @@
 from bin import Controller
-
+import torch
 import os
 import warnings
 import yaml
 import argparse
 
-from flask import Flask
+from serving import FlaskApp
 
 parser = argparse.ArgumentParser(description="Commandline arguments for \
     running seq2seq server.")
@@ -13,8 +13,8 @@ parser = argparse.ArgumentParser(description="Commandline arguments for \
 parser.add_argument("--config", type=str, default=None,
                     help="Path to config file in which contains hyperparameters")
 
-parser.add_argument("--save_dir", type=str, default='.',
-                    help="Path to saved model or want to save model")
+parser.add_argument("--save_dir", type=str, default=None,
+                    help="Path to saved data utils")
 
 args = parser.parse_args()
 options = {}
@@ -28,14 +28,10 @@ if args.config is not None:
 else:
     print("Using default config.")
 
-class FlaskApp(Flask):
-    def __init__(self, controller):
-        # self.controller = controller
-        self.controller = controller
-        super().__init__(__name__)
-
-controller = Controller(mode="infer", save_dir=args.save_dir, **options)
-app = FlaskApp(controller=controller)
+app = FlaskApp(model_path=options.get("model_path"), \
+    save_dir=args.save_dir, device=options.get("device", "cpu"))
+# Load all APIs
+from serving.translate import *
 
 if __name__ == "__main__":
     # Suppress Warning

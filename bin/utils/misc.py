@@ -1,12 +1,11 @@
 import torch
+import os
 import sys
 
-
-def generate_subsequent_mask(sz, device="cpu"):
+def generate_subsequent_mask(sz: int, device:str="cpu"):
     return (torch.triu(
         torch.ones(sz, sz, dtype=torch.int, device=device)
     ) == 0).transpose(0, 1)
-
 
 def print_progress(cur_val, max_val, max_len=50, prefix='',
                    pattern='=', suffix='', time_used=0):

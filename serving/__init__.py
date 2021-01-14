@@ -1,1 +1,1 @@
-from server import app
+from .app import FlaskApp

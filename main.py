@@ -17,8 +17,8 @@ torch.manual_seed(0)
 parser = argparse.ArgumentParser(description="Commandline arguments for \
     running seq2seq system.")
 
-parser.add_argument("mode", type=str, choices=["train", "infer"], \
-    help="Choose type of using: [train] or [infer]")
+parser.add_argument("mode", type=str, choices=["train", "infer", "compile"], \
+    help="Choose type of using: [train], [infer], [compile]")
 
 parser.add_argument("--config", type=str, default=None, \
     help="Path to config file in which contains hyperparameters")
@@ -30,10 +30,13 @@ parser.add_argument("--checkpoint", type=int, default=None, \
     help="Load specified checkpoint of training")
 
 parser.add_argument("--infer_src_path", type=str, \
-    help="Path to src file which needed for inference")
+    help="[infer] Path to src file which needed for inference")
 
 parser.add_argument("--infer_save_path", type=str, default="output.txt", \
-    help="Path to save file which is result of inference")
+    help="[infer] Path to save file which is result of inference")
+
+parser.add_argument("--export_path", type=str, default="export.pt", \
+    help="[compile] Path to save TorchScript")
 
 
 def main():
@@ -55,10 +58,13 @@ def main():
         controller.train(ckpt=args.checkpoint, train_config=train_config)
     if args.mode == "infer":
         infer_config = options.get("infer_config", {})
-        controller.infer_from_file(src_path=args.infer_src_path,
-                                   save_path=args.infer_save_path, 
-                                   ckpt=args.checkpoint,
-                                   **infer_config)
+        controller.infer(src_path=args.infer_src_path,
+                         save_path=args.infer_save_path, 
+                         ckpt=args.checkpoint, **infer_config)
+    if args.mode == "compile":
+        infer_config = options.get("infer_config", {})
+        controller.compile(ckpt=args.checkpoint, \
+            export_path=args.export_path, **infer_config)
 
 
 if __name__ == "__main__":
