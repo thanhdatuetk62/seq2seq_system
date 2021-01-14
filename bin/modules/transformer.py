@@ -206,6 +206,6 @@ class Decoder(nn.Module):
             out, score = mod(out, memory, memory_mask, trg_mask)
         out = self.norm(out)
         # return with head-averaged encoder-decoder attention from the top decoder layer
-        score = torch.mean(score, dim=1)
-        return out, score
+        # score = torch.mean(score, dim=1)
+        return out, score[:, 0, :, :].squeeze(1)
         
