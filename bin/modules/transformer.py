@@ -42,7 +42,7 @@ class MultiAttention(nn.Module):
         k = self.w_k(x_k).view(n, -1, n_heads, d_k).transpose(1, 2)
         v = self.w_v(x_v).view(n, -1, n_heads, d_v).transpose(1, 2)
 
-        # Scaled dot-product attention score [N x H x S x S]
+        # Scaled dot-product attention score [N x H x S x T]
         score = torch.matmul(q, k.transpose(-1, -2)) * (d_k ** -0.5)
         # Mask attention
         if mask.dim() > 1:
@@ -139,7 +139,7 @@ class DecoderLayer(nn.Module):
             (Tensor [N x T x d_model]) - Output tensor
         """
         trg_2 = self.norm_1(trg)
-        out, self_score = self.multi_att_1(trg_2, trg_2, trg_2, trg_mask)
+        out, _ = self.multi_att_1(trg_2, trg_2, trg_2, trg_mask)
         trg = trg + self.dropout_1(out)
         
         trg_2 = self.norm_2(trg)
@@ -170,7 +170,7 @@ class DecoderLayer(nn.Module):
         # trg = trg + self.dropout_3(trg_2)
         # trg = self.norm_3(trg)
 
-        return trg
+        return trg, score
 
 
 class Encoder(nn.Module):
@@ -201,8 +201,11 @@ class Decoder(nn.Module):
     
     def forward(self, trg, memory, memory_mask=DEFAULT_MASK, trg_mask=DEFAULT_MASK):
         out = trg
+        score = None
         for mod in self.layers:
-            out = mod(out, memory, memory_mask, trg_mask)
+            out, score = mod(out, memory, memory_mask, trg_mask)
         out = self.norm(out)
-        return out
+        # return with head-averaged encoder-decoder attention from the top decoder layer
+        score = torch.mean(score, dim=1)
+        return out, score
         
