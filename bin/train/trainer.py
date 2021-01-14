@@ -114,7 +114,7 @@ class Trainer(nn.Module):
                         self.report_steps
                     avg_loss = total_loss / self.report_steps
                     print("\x1b[1K\rEPOCH {} - STEP {} - TRAIN_LOSS = {:.4f} -\
-SPEED = {:.2f} sec/batch".format(self.epoch, step+1, avg_loss, speed))
+ SPEED = {:.2f} sec/batch".format(self.epoch, step+1, avg_loss, speed))
                     total_loss = 0.0
                     report_time = time.perf_counter()
 

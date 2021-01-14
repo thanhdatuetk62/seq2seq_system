@@ -12,7 +12,7 @@ from .forecast import find_forecast_strategy
 
 class Controller(object):
     def __init__(self, mode, model, model_kwargs={}, data_kwargs={},
-                 device="cpu", save_dir='./run', **kwargs):
+                 device="cpu", save_dir='./run', keep_checkpoints=100, **kwargs):
 
         # Make directory for saving checkpoints and vocab
         self.save_dir = save_dir
@@ -26,18 +26,27 @@ class Controller(object):
         self.model = find_model(model)(data=self.data, device=device, \
             **model_kwargs)
         self.device = device
+        self.keep_checkpoints = keep_checkpoints
     
     def save_to_file(self, state_dict, ckpt=0):
         save_file = os.path.join(self.save_dir,
                                  'checkpoint_{}.pt'.format(ckpt))
         torch.save(state_dict, save_file)
         print("Saved checkpoint {} to file {}".format(ckpt, save_file))
+        while True:
+            saved_checkpoints = self._find_all_checkpoints()
+            if len(saved_checkpoints) <= self.keep_checkpoints:
+                break
+            earliest = min(saved_checkpoints.keys())
+            name = saved_checkpoints[earliest]
+            os.remove(name)
+            print("Removed checkpoint {} from save_dir".format(name))
     
     def train(self, train_config, ckpt=None):
         trainer = Trainer(self, **train_config)
         trainer.to(self.device)
         # Load checkpoint
-        ckpt_file = self._find_checkpoint(ckpt=ckpt)
+        ckpt_file = self._select_checkpoint(ckpt=ckpt)
         if ckpt_file is not None:
             print("Loading checkpoint file {} ...".format(ckpt_file), end=' ')
             state_dict = torch.load(ckpt_file)
@@ -59,7 +68,7 @@ class Controller(object):
             **strategy_kwargs)
         forecaster.to(self.device)
         # Load checkpoint
-        ckpt_file = self._find_checkpoint(ckpt=ckpt)
+        ckpt_file = self._select_checkpoint(ckpt=ckpt)
         if ckpt_file is not None:
             print("Loading checkpoint file {} ...".format(ckpt_file), end=' ')
             state_dict = torch.load(ckpt_file)
@@ -80,7 +89,7 @@ class Controller(object):
             **strategy_kwargs)
         forecaster.eval()
         # Load checkpoint
-        ckpt_file = self._find_checkpoint(ckpt=ckpt)
+        ckpt_file = self._select_checkpoint(ckpt=ckpt)
         if ckpt_file is not None:
             print("Loading checkpoint file {} ...".format(ckpt_file), end=' ')
             state_dict = torch.load(ckpt_file)
@@ -91,21 +100,21 @@ class Controller(object):
         torch.jit.save(forecaster, export_path)
         print("Model compiled successfully")
 
-    def _find_checkpoint(self, ckpt=None):
+    def _select_checkpoint(self, ckpt=None):
+        ckpts = self._find_all_checkpoints()
+        key = ckpt if (ckpt is not None and ckpt in ckpts) else max(ckpts.keys())
+        return ckpts[key]
+
+    def _find_all_checkpoints(self):
         pattern = re.compile(r"checkpoint_(\d+).pt")
-        last_ckpt = -1
+        ckpts = {}
         for f in os.listdir(self.save_dir):
             if not os.path.isfile(os.path.join(self.save_dir, f)):
                 continue
             match = pattern.search(f)
             if match is not None:
                 ckpt_id = int(match.groups()[0])
-                if ckpt_id == ckpt:
-                    return os.path.join(self.save_dir, f)
-                last_ckpt = max(last_ckpt, ckpt_id)
-        if last_ckpt < 0:
-            return None
-        return os.path.join(self.save_dir,
-                            "checkpoint_{}.pt".format(last_ckpt))
+                ckpts[ckpt_id] = os.path.join(self.save_dir, f)
+        return ckpts
 
     

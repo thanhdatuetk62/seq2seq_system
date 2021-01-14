@@ -104,7 +104,8 @@ class TransformerNMT(_Model):
 
         # Compute model output
         trg_mask = generate_subsequent_mask(trg.size(1)-1, self.device)
-        output = self(src, trg[:, :-1], trg_mask=trg_mask)
+        src_mask = memory_mask = torch.tensor(-1)
+        output = self(src, trg[:, :-1], src_mask, memory_mask, trg_mask)
 
         # Flatten tensors for computing loss`
         preds = output.view(-1, self.trg_vocab_size)
