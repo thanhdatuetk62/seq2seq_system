@@ -16,7 +16,7 @@ class Trainer(nn.Module):
                  loss_metric="xent", loss_kwargs={}, 
                  eval_metric=None, strategy=None, strategy_kwargs={},
                  n_epochs=50, report_steps=200, valid_epochs=1, eval_epochs=1, 
-                 save_checkpoint_epochs=1):
+                 save_checkpoint_epochs=1, use_float32=False):
         super().__init__()
         self.controller = controller
         self.data = controller.data
@@ -27,6 +27,7 @@ class Trainer(nn.Module):
         self.valid_epochs = valid_epochs
         self.eval_epochs = eval_epochs
         self.save_checkpoint_epochs = save_checkpoint_epochs
+        self.use_float32 = use_float32
 
         # Define optimizer/scheduler
         optimizer = find_optimizer(optimizer)(self.parameters(), \
@@ -63,14 +64,12 @@ class Trainer(nn.Module):
 
     def run(self):
         # Turn on training mode
-        self.model.train()
-
         if self.epoch < 0:
             self.model.init_params()
-
-        print("Start training ...")
         
-        scaler = GradScaler()
+        self.model.train()
+        print("Start training ...")
+        scaler = GradScaler() if self.use_float32 else None
         total_n_sents = len(self.data.train_iter.dataset)
         while self.epoch + 1 < self.n_epochs:
             self.epoch += 1
@@ -82,25 +81,11 @@ class Trainer(nn.Module):
             print_progress(n_sents, total_n_sents, max_len=40,
                            prefix="EPOCH {}".format(self.epoch),
                            suffix="DONE", time_used=0)
-
+            
             self.data.train_iter.init_epoch()
             for step, batch in enumerate(self.data.train_iter):
-                # Perform one training step
-                with autocast():
-                    self.train()
-                    loss = self.model.train_step(batch.src, batch.trg, \
-                        self.loss_metric)
-                # Update params
-                self.optimizer.zero_grad(set_to_none=True)
-                # loss.backward()
-                # self.optimizer.step()
-                scaler.scale(loss).backward()
-                scaler.step(self.optimizer)
-                scaler.update()
-
                 # Add loss value to the total loss
-                total_loss +=loss.item()
-
+                total_loss += self.train_step(batch.src, batch.trg, scaler)
                 # Update progress bar
                 n_sents += batch.batch_size
                 print_progress(n_sents, total_n_sents, max_len=40,
@@ -143,13 +128,58 @@ class Trainer(nn.Module):
                 print("EPOCH {} - EVAL_SCORE = {:.4f} - TOTAL_TIME = {:.2f}"
                       .format(self.epoch, eval_score, time_used))
     
+    def train_step(self, src, trg, scaler=None):
+        """
+        Compute loss for each train step and update params
+        Arguments:
+            src: (Tensor [S x N]) - Input to Encoder
+            trg: (Tensor [T x N]) - Input to Decoder
+        """
+        self.train()
+
+        with autocast(enabled=self.use_float32):
+            out = self.model(src, trg[:-1])
+
+            # Flatten tensors for computing loss
+            preds = out.view(-1, len(self.data.trg_vocab))
+            ys = trg[1:].contiguous().view(-1)
+
+            # Feed inputs into loss metric
+            loss = self.loss_metric(preds, ys)
+        
+        self.optimizer.zero_grad(set_to_none=True)
+
+        # Update params
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.step(self.optimizer)
+            scaler.update()
+        else: 
+            loss.backward()
+            self.optimizer.step()
+        
+        return loss.item()
+
+    @torch.no_grad()
     def validate(self):
         print("Running Validation ...")
         self.eval()
-        losses = [self.model.validate_step(batch.src, batch.trg, \
-            self.loss_metric) for batch in self.data.valid_iter]
-        return sum(losses) / len(losses)
 
+        loss, m = 0.0, 0
+        for batch in self.data.valid_iter:
+            # loss = self.model.loss_step(src, trg, self.loss_metric)
+            out = self.model(batch.src, batch.trg[:-1])
+
+            # Flatten tensors for computing loss
+            preds = out.view(-1, len(self.data.trg_vocab))
+            ys = batch.trg[1:].contiguous().view(-1)
+            
+            # Feed inputs into loss metric
+            loss += self.loss_metric(preds, ys).item()
+            m += 1
+        return loss / m
+
+    @torch.no_grad()
     def evaluate(self):
         print("Running evaluation ...")
         self.eval()
@@ -170,14 +200,13 @@ class Trainer(nn.Module):
             c = [self.data.convert_to_str(sent) 
                  for sent in self.strategy(batch.src)]
             r = [[[self.data.trg_vocab.itos[j] for j in sent 
-                   if j.item() not in ignores]] for sent in batch.trg]
+                   if j.item() not in ignores]] for sent in batch.trg.t()]
             candidate_corpus += c
             references_corpus += r
-
+            
             # Update progress
             n_sents += batch.batch_size
             time_used = time.perf_counter() - start_time
             print_progress(n_sents, total_n_sents, max_len=40,
                            prefix="EVAL", suffix="DONE", time_used=time_used)
-                        
         return self.eval_metric(candidate_corpus, references_corpus)

@@ -38,7 +38,8 @@ class TranslationDataset(Dataset):
              io.open(trg_path, 'r', encoding="utf-8") as trg_file:
             for src_line, trg_line in zip(src_file, trg_file):
                 src_line, trg_line = src_line.strip(), trg_line.strip()
-                examples.append(Example.fromlist([src_line, trg_line], fields))
+                if src_line != '' and trg_line != '':
+                    examples.append(Example.fromlist([src_line, trg_line], fields))
         
         filter_fn = _create_filter_fn(src_max_len=src_max_len, \
             trg_max_len=trg_max_len)

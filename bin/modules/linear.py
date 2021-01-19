@@ -1,21 +1,24 @@
 import torch 
 from torch import nn
+from torch.nn import init
 from torch.nn import functional as F
+from torch.nn.parameter import Parameter
 
 activation_fn = {"relu": F.relu}
 
-class FeedForward(nn.Module):
-    def __init__(self, *d_ff, activation="relu"):
+class Linear(nn.Module):
+    def __init__(self, d_in, d_out):
         super().__init__()
-        n = len(d_ff)
-        assert n > 1
+        self.d_in = d_in
+        self.d_out = d_out
+        self.w = Parameter(torch.Tensor(d_out, d_in))
+        self.b = Parameter(torch.Tensor(d_out))
 
-        self.d_in = d_ff[0]
-        self.activation_fn = activation_fn[activation]
-        self.layers = [nn.Linear(d_ff[i-1], d_ff[i]) for i in range(1, n)]
+        self._reset_params()
     
-    def foward(self, x):
-        assert x.size(-1) == self.d_in
-        for layer in self.layers:
-            x = self.activation_fn(layer(x))
-        return x
+    def _reset_params(self):
+        init.xavier_uniform_(self.w)
+        init.constant_(self.b, 0.0)
+
+    def forward(self, x):
+        return F.linear(x, self.w, self.b)

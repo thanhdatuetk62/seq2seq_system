@@ -102,6 +102,8 @@ class Controller(object):
 
     def _select_checkpoint(self, ckpt=None):
         ckpts = self._find_all_checkpoints()
+        if len(ckpts) == 0:
+            return None
         key = ckpt if (ckpt is not None and ckpt in ckpts) else max(ckpts.keys())
         return ckpts[key]
 

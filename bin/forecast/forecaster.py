@@ -1,6 +1,6 @@
 import io
 import time
-
+import torch
 from torch import nn
 from ..utils import print_progress
 
@@ -10,6 +10,7 @@ class Forecaster(nn.Module):
         self.controller = controller
         self.model = controller.model
         self.data = controller.data
+        self.device = controller.device
         
         # Define decode strategy
         self.sos_token = self.data.trg_vocab.stoi["<sos>"]
@@ -18,6 +19,7 @@ class Forecaster(nn.Module):
     def load_state_dict(self, state_dict):
         self.model.load_state_dict(state_dict["model"])
     
+    @torch.no_grad()
     def infer_from_file(self, src_path, save_path, batch_size):    
         """
         Infer from source file (required pre-tokenized in this file) and save 
@@ -48,7 +50,7 @@ class Forecaster(nn.Module):
                 trg_sents += [' '.join(self.data.convert_to_str(tokens))
                                 for tokens in self(src)]
                 # Update progress
-                n_sents += src.size(0)
+                n_sents += src.size(1)
                 time_used = time.perf_counter() - start_time
                 print_progress(n_sents, total_n_sents, max_len=40,
                                 prefix="INFER", suffix="DONE",

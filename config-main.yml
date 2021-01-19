@@ -52,11 +52,12 @@ train_config:
   loss_kwargs:
     label_smoothing: 0.1
 
-  n_epochs: 50
-  report_steps: 500
+  n_epochs: 20
+  report_steps: 200
   valid_epochs: 1
   eval_epochs: 1
-  save_checkpoint_epochs: 3
+  save_checkpoint_epochs: 1
+  use_float32: false
 
   eval_metric: bleu
   strategy: beam_search

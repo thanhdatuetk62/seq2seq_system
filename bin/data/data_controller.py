@@ -18,9 +18,8 @@ class DataController(object):
         self.save_dir = save_dir
         self.device = device
         # Initialize source and target fields
-        self.src_field = Field(batch_first=True)
-        self.trg_field = Field(batch_first=True, init_token="<sos>", \
-            eos_token="<eos>")
+        self.src_field = Field()
+        self.trg_field = Field(init_token="<sos>", eos_token="<eos>")
         
         # Define dataset type
         if dataset not in datasets:

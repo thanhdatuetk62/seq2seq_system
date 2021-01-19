@@ -14,7 +14,6 @@ class _Model(nn.Module):
         print("Source vocab size: ", self.src_vocab_size)
         print("Target vocab size: ", self.trg_vocab_size)
 
-    @torch.jit.ignore
     def init_params(self):
         print("Initialize model parameters ...")
         for p in self.parameters():

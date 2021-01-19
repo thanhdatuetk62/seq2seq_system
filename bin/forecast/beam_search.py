@@ -25,27 +25,26 @@ class BeamSearch(Forecaster):
         self.beta = beta
         self.gamma = gamma
 
-        # Hypothesises for searching
-        sent = torch.zeros(1, k, max_len).long()
-        sent[:, :, 0] = self.sos_token
+        sent = torch.zeros(max_len, 1, k, dtype=torch.long)
+        sent[0] = self.sos_token
+        self.register_buffer("sent", sent, persistent=False)
+
         score = torch.zeros((1, k), dtype=torch.float)
+        self.register_buffer("score", score, persistent=False)
+
         is_done = torch.zeros(1, dtype=torch.int)
-        sent_eos = torch.tensor([self.eos_token] * k).unsqueeze(0)
-        
-        # Register these hypo to module's buffer (Useful when casting device)
-        vars_register = [("sent", sent), ("score", score),
-                         ("is_done", is_done), ("sent_eos", sent_eos)]
-        for name, val in vars_register:
-            self.register_buffer(name, val, persistent=False)
+        self.register_buffer("is_done", is_done, persistent=False)
 
         # Init tmp vars
-        self._disable()
+        self._reset()
     
     def forward(self, src):
         """
         Infer a source batch sentence
+        Arguments:
+            src: (Tensor [S x N])
         """
-        self._enable(src)
+        self._initialize(src)
         # Algorithm starts here
         for t in range(1, self.max_len):
             # All beams from all batches terminated, early stopping process
@@ -53,59 +52,60 @@ class BeamSearch(Forecaster):
                 break
             if t == 1:
                 # if cur_len = 1, run for the first tokens of k beams
-                probs, attn_scores = self.model.infer_step(
+                probs, attn_score = self.model.infer_step(
                     torch.tensor([self.sos_token] * len(self.q), \
-                        device=self.sents.device).unsqueeze(1), \
-                        self.memory, src)
+                        device=self.device).unsqueeze(0), self.memory_info)
             else:
-                probs, attn_scores = self.model.infer_step(
-                    self.sents[self.q, :, :t].view(len(self.q) * self.k, -1), 
-                    self.memories, src)
-            self._update(t, probs, attn_scores)
+                probs, attn_score = self.model.infer_step(
+                    self.sents[:t, self.q].view(t, -1), self.memories_info)
+            self._update(t, probs, attn_score)
         results = self._top()
         # Algorithm ends here
-        self._disable()
+        self._reset()
         return results
 
-    def _enable(self, src):
-        """
-        Create some useful temporary variables for inference
-        """
+    def _repeat_interleave_keys(self):
+        self.memories_info = {k : v[:, self.q].repeat_interleave(self.k, dim=1) \
+            for k, v in self.memory_info.items()}
+
+    def _initialize(self, src):
+        """Create some useful temporary variables for inference"""
         # Encoder output
-        n = src.size(0)
-        self.memory = self.model.memory(src)
+        n = src.size(1)
+        self.memory_info = self.model.encode(src)
         self.q = torch.arange(n).long()
 
         # Scale-up attributes to batch size (N), they change after each batch
-        self.sents = self.sent.repeat(n, 1, 1)
+        self.sents = self.sent.repeat(1, n, 1)
         self.scores = self.score.repeat(n, 1)
         self.are_done = self.is_done.repeat(n)
-        self.memories = torch.repeat_interleave(self.memory[self.q], self.k, dim=0)
 
-    def _disable(self):
+        for k, v in self.memory_info.items():
+            if not isinstance(v, torch.Tensor):
+                raise TypeError("Expected Tensor type but got {}".format(type(v)))
+            assert v.size(1) == n
+        self._repeat_interleave_keys()
+        
+    def _reset(self):
         """Free temporary variables after finishing one batch sentence"""
-        DEFAULT_TENSOR_VALUE = torch.tensor(-1).long()
-
-        self.q = DEFAULT_TENSOR_VALUE
-        self.sents = DEFAULT_TENSOR_VALUE
-        self.scores = DEFAULT_TENSOR_VALUE.float()
-        self.are_done = DEFAULT_TENSOR_VALUE
-        self.memory = DEFAULT_TENSOR_VALUE.float()
-        self.memories = DEFAULT_TENSOR_VALUE.float()
-        self.att_scores = []
+        self.q = None
+        self.sents = None
+        self.scores = None
+        self.are_done = None
+        self.memory_info = None
+        self.memories_info = None
     
-    def _update(self, t:int, probs, attn_scores):
+    def _update(self, t:int, probs, attn_score):
         """
         Update scores for the next infer step
         Arguments:
             t (int) - decode timestep (current length)
             probs (Tensor [m x vocab_size])
                 m = n * k   (if t > 0)
-                m = n       (if t = 0) 
-            attn_scores (Tensor [m x t x S]) - Encoder-Decoder attention score
+                m = n       (if t = 0)
         """
         n, k, q, eos_token = len(self.q), self.k, self.q, self.eos_token
-        sents, scores, sent_eos = self.sents, self.scores, self.sent_eos
+        sents, scores = self.sents, self.scores
 
         m = probs.size(0)
         assert m % n == 0
@@ -116,8 +116,8 @@ class BeamSearch(Forecaster):
 
         # First time step
         if t == 1:
-            sents[:, :, 1] = k_index
-            scores += k_prob.log()
+            sents[t] = k_index
+            scores = scores + k_prob.log()
     
         # Follow the first time step
         if t > 1:
@@ -125,39 +125,36 @@ class BeamSearch(Forecaster):
 
             # Detach batch size and beam size
             k_prob, k_index = k_prob.view(n, k, k), k_index.view(n, k, k)
-            attn_scores = attn_scores.view(n, k, t, -1)
 
             # Preserve eos beams
-            eos_mask = (sents[q, :, t-1] == eos_token).view(n, k, 1)
-            k_prob.masked_fill_(eos_mask, 1.0)
-            k_index.masked_fill_(eos_mask, eos_token)
+            eos_mask = (sents[t-1, q] == eos_token).unsqueeze(-1)
+            assert eos_mask.size() == (n, k, 1)
 
-            # [n x k x 1] +  [n x k x k] = [n x k x k]
-            combine_prob = self._compute_score(scores[q], k_prob, t, \
-                attn_scores).view(n, int(k ** 2))
+            k_prob = k_prob.masked_fill(eos_mask, 1.0)
+            k_index = k_index.masked_fill(eos_mask, eos_token)
+
+            combine_prob = scores[q].unsqueeze(-1) + k_prob.log()
+            combine_prob = self._compute_score(combine_prob, t).view(n, -1)
+            assert combine_prob.size() == (n, k * k)
             
-            # [n x k], [n x k]
             scores[q], positions = combine_prob.topk(k, dim=-1)
+            assert positions.size() == (n, k)
 
-            # The rows selected from top k
-            rows = positions // k
-            # The indexes in vocab respected to these rows
-            cols = positions % k
-
-            id = torch.arange(n).unsqueeze(1)
-            sents[q, :, :] = sents[q.unsqueeze(1), rows, :]
-            sents[q, :, t] = k_index[id, rows, cols].view(n, k)
+            # Restore origin beams indices
+            rows, cols = positions // k, positions % k
+            sents[:t, q] = sents[:t, q.unsqueeze(1), rows]
+            sents[t, q] = k_index[torch.arange(n).unsqueeze(1), rows, cols]
 
         # update which sentences finished all its beams
-        mask = (sents[:, :, t] == sent_eos).all(1).view(-1)
+        mask = (sents[t] == eos_token).all(-1)
         tmp = self.are_done.masked_fill(mask, 1)
-        if not (tmp == self.are_done).all():
+        if (tmp == self.are_done).any():
             # Recreate some tmp vars whenever encounter a change
             self.are_done = tmp
             self.q = torch.nonzero(self.are_done == 0).view(-1)
-            self.memories = torch.repeat_interleave(self.memory[self.q], self.k, dim=0)
+            self._repeat_interleave_keys()
     
-    def _compute_score(self, scores, k_prob, t:int, attn_scores):
+    def _compute_score(self, scores, t:int):
         """
         Update scores each timestep
         Args:
@@ -171,20 +168,7 @@ class BeamSearch(Forecaster):
         Returns:
             (Tensor [n x k x k]) - Combined scores 
         """
-        scores = scores.unsqueeze(-1)
-        k_prob = torch.log(k_prob)
-        
-        # Length normalization
-        lp = (5 + t) ** self.alpha / (5 + 1) ** self.alpha
-        
-        # Coverage penalty
-        # [n x k x S]
-        cp = attn_scores.sum(dim=2)
-        cp.masked_fill_(cp > 1.0, 1.0)
-        # [n x k x 1]
-        cp = self.beta * cp.log().sum(dim=-1).unsqueeze(-1)
-
-        return (scores + k_prob) / lp + cp
+        return scores
 
     def _top(self):
         """
@@ -192,7 +176,7 @@ class BeamSearch(Forecaster):
         Returns:
             (Tensor [N x T]) - Target sentences generated by the algorithm
         """
-        # Get the best beam
-        results = [self.sents[t, int(j.item()), :] \
-            for t, j in enumerate(self.scores.argmax(dim=-1))]
+        # Get the best beam\
+        results = [self.sents[:, i, int(j.item())] \
+            for i, j in enumerate(self.scores.argmax(dim=-1))]
         return results
