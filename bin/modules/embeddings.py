@@ -15,15 +15,15 @@ class PositionalEncoding(nn.Module):
         pe[:, 0::2] = torch.sin(rows * cols)
         pe[:, 1::2] = torch.cos(rows * cols)
 
-        pe.unsqueeze_(0)
+        pe.unsqueeze_(1)
         self.register_buffer("pe", pe, persistent=False)
 
     def forward(self, x):
         """
         Arguments:
-            x (Tensor): [batch_size x seq_len x d_model]
+            x (Tensor): [len x N x d_model]
         """
         # Add pe to the input and dropout
         x = x * (self.d_model ** 0.5)
-        x = x + self.pe[:, :x.size(1)]
+        x = x + self.pe[:x.size(0)]
         return self.dropout(x)
