@@ -297,5 +297,5 @@ class Decoder(nn.Module):
                 memory_key_padding_mask, trg_key_padding_mask)
             scores.append(score)
         out = self.norm(out)
-        return out, sum(scores) / self.n_layers
+        return out, scores[-1]
         

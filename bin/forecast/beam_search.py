@@ -11,7 +11,7 @@ class BeamSearch(Forecaster):
         Constructor Args:
             k: (int) - Beam size
             max_len: (int) - Maximum number of time steps for generating output
-            replace_unk: (bool) - Whether to replace unk word by origin src tokens
+            replace_unk: (bool) - Whether to replace unk tokens by origin src tokens
             alpha: (float) - Length normalization coefficient
             beta: (float) - Coverage normalization coefficient
             gamma: (float) - End of sentence normalization
@@ -34,6 +34,9 @@ class BeamSearch(Forecaster):
 
         is_done = torch.zeros(1, dtype=torch.int)
         self.register_buffer("is_done", is_done, persistent=False)
+
+        indices = torch.arange(1, max_len+1, dtype=torch.long)
+        self.register_buffer("indices", indices, persistent=False)
 
         # Init tmp vars
         self._reset()
@@ -75,7 +78,7 @@ class BeamSearch(Forecaster):
         self.memory_info = self.model.encode(src)
         self.q = torch.arange(n).long()
 
-        # Scale-up attributes to batch size (N), they change after each batch
+        # Scale up attributes to batch size (N), they change after each batch
         self.sents = self.sent.repeat(1, n, 1)
         self.scores = self.score.repeat(n, 1)
         self.are_done = self.is_done.repeat(n)
@@ -103,16 +106,17 @@ class BeamSearch(Forecaster):
             probs (Tensor [m x vocab_size])
                 m = n * k   (if t > 0)
                 m = n       (if t = 0)
+            attn_score (Tensor [m x t x S]) - Encoder-Decoder Attention score
         """
         n, k, q, eos_token = len(self.q), self.k, self.q, self.eos_token
         sents, scores = self.sents, self.scores
 
         m = probs.size(0)
         assert m % n == 0
+        assert attn_score.size(0) == m and attn_score.size(1) == t
 
         k_prob, k_index = probs.topk(k, dim=-1)
-        assert k_index.size() == (m, k)
-        assert k_prob.size()  == (m, k)
+        assert k_index.size() == (m, k) and k_prob.size() == (m, k)
 
         # First time step
         if t == 1:
@@ -125,6 +129,7 @@ class BeamSearch(Forecaster):
 
             # Detach batch size and beam size
             k_prob, k_index = k_prob.view(n, k, k), k_index.view(n, k, k)
+            attn_score = attn_score.view(n, k, t, -1)
 
             # Preserve eos beams
             eos_mask = (sents[t-1, q] == eos_token).unsqueeze(-1)
@@ -133,17 +138,27 @@ class BeamSearch(Forecaster):
             k_prob = k_prob.masked_fill(eos_mask, 1.0)
             k_index = k_index.masked_fill(eos_mask, eos_token)
 
-            combine_prob = scores[q].unsqueeze(-1) + k_prob.log()
-            combine_prob = self._compute_score(combine_prob, t).view(n, -1)
-            assert combine_prob.size() == (n, k * k)
+            pured = scores[q].unsqueeze(-1) + k_prob.log()
+            combined = self._compute_score(sents[:t, q], pured, attn_score)
+
+            pured = pured.view(n, -1)
+            combined = combined.view(n, -1)
+            assert combined.size() == (n, k * k) and pured.size() == (n, k * k)
             
-            scores[q], positions = combine_prob.topk(k, dim=-1)
+            combined, positions = combined.topk(k, dim=-1)
             assert positions.size() == (n, k)
+            scores[q] = pured.gather(dim=-1, index=positions)
 
             # Restore origin beams indices
             rows, cols = positions // k, positions % k
             sents[:t, q] = sents[:t, q.unsqueeze(1), rows]
             sents[t, q] = k_index[torch.arange(n).unsqueeze(1), rows, cols]
+
+            if t + 1 == self.max_len:
+                scores[q] = combined
+            else: 
+                eos_beams = (sents[t, q] == eos_token)
+                scores[q.unsqueeze(-1), eos_beams] = combined
 
         # update which sentences finished all its beams
         mask = (sents[t] == eos_token).all(-1)
@@ -154,21 +169,35 @@ class BeamSearch(Forecaster):
             self.q = torch.nonzero(self.are_done == 0).view(-1)
             self._repeat_interleave_keys()
     
-    def _compute_score(self, scores, t:int):
+    def _compute_score(self, sents, scores, attn_scores):
         """
-        Update scores each timestep
+        Update scores for each timestep
         Args:
-            scores:  (Tensor [n x k])
-                - Current probabilities.
-            k_prob: (Tensor [n x k x k]) 
-                - Probabilities of the next tokens for each beam from each 
-                    sentence of the batch.
-            t: (int) - current length
+            sents: (Tensor [t x n x k])
+            scores:  (Tensor [n x k x k]) Current probabilities.
             attn_scores: (Tensor [n x k x t x S]) - Encoder-Decoder attention score
         Returns:
             (Tensor [n x k x k]) - Combined scores 
         """
-        return scores
+        t, n, k = sents.size()
+        lp, cp = torch.ones((n, k)), 0.0
+        eos_mask = (sents[t-1] == self.eos_token)
+
+        if self.alpha > 0.0:
+            # Length normalization
+            scalar = ((5 + t) / 6) ** self.alpha
+            lp = lp * scalar
+            lp = lp.masked_fill(eos_mask, 1.0).unsqueeze(-1)
+        
+        if self.beta > 0.0:
+            # Coverage penalty
+            cp = attn_scores.sum(dim=2)
+            cp = cp.masked_fill(cp > 1.0, 1.0).log().sum(dim=2).unsqueeze(-1)
+            assert cp.size() == (n, k, 1)
+            cp = self.beta * cp
+            cp = cp.masked_fill(eos_mask, 0.0).unsqueeze(-1)
+
+        return scores / lp + cp
 
     def _top(self):
         """
@@ -176,7 +205,7 @@ class BeamSearch(Forecaster):
         Returns:
             (Tensor [N x T]) - Target sentences generated by the algorithm
         """
-        # Get the best beam\
+        # Get the best beam
         results = [self.sents[:, i, int(j.item())] \
             for i, j in enumerate(self.scores.argmax(dim=-1))]
         return results
