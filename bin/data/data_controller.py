@@ -72,8 +72,12 @@ class DataController(object):
         """
         Create iterator for inference
         """
-        for i in range(0, len(src_sents), batch_size):
-            batch = src_sents[i: i+batch_size]
+        filtered_src_sents = []
+        for sent in src_sents:
+            if len(sent) > 0:
+                filtered_src_sents.append(sent)
+        for i in range(0, len(filtered_src_sents), batch_size):
+            batch = filtered_src_sents[i: i+batch_size]
             yield self.src_field.process(batch, device=self.device)
 
     def create_iterator(self, ds, batch_size=32, train=True, device="cpu"):

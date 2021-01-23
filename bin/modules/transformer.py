@@ -268,4 +268,73 @@ class Decoder(nn.Module):
             scores.append(score)
         out = self.norm(out)
         return out, scores[-1]
+
+
+from ..utils import generate_subsequent_mask
+
+
+class MemorizedDecoder(nn.Module):
+    """
+    Ultra fast decoder for BeamSearch powered by Dynamic Programming
+    """
+    def __init__(self, model, k, eos_token, sos_token, memory_info, batch_size):
+        super().__init__()
+        self.model = model
+        self.k = k
+        self.n = batch_size
+        self.eos_token = eos_token
+        self.sos_token = sos_token
+        self.cache = [dict({}) for _ in range(model.decoder.n_layers)]
+
+        self.memory = memory_info["memory"]
+        self.memories = self.memory.repeat_interleave(k, dim=1)
+
+        self.padding_mask = memory_info["memory_key_padding_mask"]
+        self.padding_masks = self.padding_mask.repeat_interleave(k, dim=1)
+    
+    def burn(self):
+        """Initialization for the first timestep"""
+        trg = torch.tensor([self.sos_token] * self.n, \
+            device=self.model.device).unsqueeze(0)
+        prob = self.decode(trg, self.memory, self.padding_mask)
+        return prob
+
+    def forward(self, trg):
+        """
+        Feed batch of target beams into Transformer decoder
+        Arguments:
+            trg: (Tensor [T x N x k]) Target input with it beams
+        Returns:
+            Tensor [N x k x trg_vocab_size]
+            - Probabilities distribution of the next generated target-side tokens
+        """
+        t, n, k = trg.size()
+        assert n == self.n and k == self.k
+
+        active_mask = (trg == self.eos_token).any(0).view(-1)
+        actives = torch.nonzero(active_mask==0).view(-1)
         
+        probs = torch.zeros((n*k, self.model.trg_vocab_size), \
+            device=self.model.device, dtype=torch.float)
+        
+        flatten_trg = trg.view(t, -1)
+        probs[actives] = self.decode(flatten_trg[:, actives], 
+            self.memories[:, actives], self.padding_masks[:, actives])
+        return probs.view(n, k, -1)
+        
+    def decode(self, trg, memory, padding_mask=None):
+        # Embedding target tokens
+        trg = self.model.trg_embed(trg)
+        trg = self.model.pe(trg)
+
+        # Transformer output
+        trg_mask = generate_subsequent_mask(trg.size(0), self.model.device)
+        output, score = self.model.decoder(trg, memory, trg_mask=trg_mask, \
+            memory_key_padding_mask=padding_mask.t())
+
+        output = self.model.out(output)
+        output = F.softmax(output, dim=-1)
+
+        # only care prob from the last token [N x trg_vocab_size]
+        return output[-1]
+
