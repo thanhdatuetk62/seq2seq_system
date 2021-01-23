@@ -140,26 +140,15 @@ class EncoderLayer(nn.Module):
         Returns:
             (Tensor [N x S x d_model]) - Output tensor
         """
-        # src_2, _ = self.multi_att(src, src, src, \
-        #     key_padding_mask=src_key_padding_mask, \
-        #     need_weights=False, attn_mask=src_mask)
-        # src = src + self.dropout_1(src_2)
-        # src = self.norm_1(src)
-
-        # src_2 = self.linear_2(self.dropout(self.activation(self.linear_1(src))))
-        # src = src + self.dropout_2(src_2)
-        # src = self.norm_2(src)
-
-        src_2 = self.norm_1(src)
-        src_2, _ = self.multi_att(src_2, src_2, src_2, \
+        src_2, _ = self.multi_att(src, src, src, \
             key_padding_mask=src_key_padding_mask, \
             need_weights=False, attn_mask=src_mask)
         src = src + self.dropout_1(src_2)
-        src = self.norm_2(src)
+        src = self.norm_1(src)
 
         src_2 = self.linear_2(self.dropout(self.activation(self.linear_1(src))))
         src = src + self.dropout_2(src_2)
-
+        src = self.norm_2(src)
         return src
 
 
@@ -201,43 +190,24 @@ class DecoderLayer(nn.Module):
             (Tensor [T x N x d_model], Tensor [N x T x S]) 
                 - Tuple contains output tensor and attention score
         """
-        # # Self-Attention layer
-        # trg_2 , _= self.multi_att_1(trg, trg, trg, \
-        #     key_padding_mask=trg_key_padding_mask, \
-        #     need_weights=False, attn_mask=trg_mask)
-        # trg = trg + self.dropout_1(trg_2)
-        # trg = self.norm_1(trg)
-
-        # # Encoder-Decoder Attention layer
-        # trg_2, score = self.multi_att_2(trg, memory, memory, \
-        #     key_padding_mask=memory_key_padding_mask, \
-        #     need_weights=True, attn_mask=memory_mask)
-        # trg = trg + self.dropout_2(trg_2)
-        # trg = self.norm_2(trg)
-
-        # # Feed Forward layer
-        # trg_2 = self.linear_2(self.dropout(self.activation(self.linear_1(trg))))
-        # trg = trg + self.dropout_3(trg_2)
-        # trg = self.norm_3(trg)
-
         # Self-Attention layer
-        trg_2 = self.norm_1(trg)
-        trg_2 , _= self.multi_att_1(trg_2, trg_2, trg_2, \
+        trg_2 , _= self.multi_att_1(trg, trg, trg, \
             key_padding_mask=trg_key_padding_mask, \
             need_weights=False, attn_mask=trg_mask)
         trg = trg + self.dropout_1(trg_2)
-        trg = self.norm_2(trg)
+        trg = self.norm_1(trg)
 
         # Encoder-Decoder Attention layer
         trg_2, score = self.multi_att_2(trg, memory, memory, \
             key_padding_mask=memory_key_padding_mask, \
             need_weights=True, attn_mask=memory_mask)
         trg = trg + self.dropout_2(trg_2)
-        trg = self.norm_3(trg)
+        trg = self.norm_2(trg)
 
         # Feed Forward layer
         trg_2 = self.linear_2(self.dropout(self.activation(self.linear_1(trg))))
         trg = trg + self.dropout_3(trg_2)
+        trg = self.norm_3(trg)
 
         return trg, score
 

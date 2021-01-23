@@ -56,23 +56,25 @@ train_config:
   report_steps: 200
   valid_epochs: 1
   eval_epochs: 1
-  save_checkpoint_epochs: 1
-  use_float32: false
+  save_checkpoint_epochs: 2
+  use_float32: true
 
   eval_metric: bleu
   strategy: beam_search
   strategy_kwargs:
     k: 4
     max_len: 160
+    alpha: 0.6
+    beta: 0.0
 
 infer_config:
   strategy: beam_search
-  batch_size: 32
+  batch_size: 64
   strategy_kwargs:
     k: 4
     max_len: 160
-    alpha: 0.0
+    alpha: 0.6
     beta: 0.0
 
 device: cuda
-keep_checkpoints: 3
+keep_checkpoints: 5

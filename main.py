@@ -9,10 +9,10 @@ import torch
 import random
 import numpy as np
 
-# torch.backends.cudnn.deterministic = True
-# np.random.seed(0)
-# random.seed(0)
-# torch.manual_seed(0)
+torch.backends.cudnn.deterministic = True
+np.random.seed(0)
+random.seed(0)
+torch.manual_seed(0)
 
 parser = argparse.ArgumentParser(description="Commandline arguments for \
     running seq2seq system.")
