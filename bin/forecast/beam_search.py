@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from .forecaster import Forecaster
-from ..modules import MemorizedDecoder
+from ..models import MemorizedDecoder
 
 
 class BeamSearch(Forecaster):
@@ -471,7 +471,7 @@ class BeamSearch3(Forecaster):
         
         # Initialize decode class
         self.decoder = MemorizedDecoder(self.model, self.k, self.eos_token, \
-            self.sos_token, self.memory_info, n)
+            self.sos_token, self.memory_info, n, src.size(0), self.device)
         
     def _reset(self):
         """Free temporary variables after finishing one batch sentence"""
@@ -501,8 +501,8 @@ class BeamSearch3(Forecaster):
             self.pured = k_prob.log()
             self.refined = torch.clone(self.pured)
     
-        # Follow the first time step
         if t > 1:
+            # Follow the first time step
             assert k_prob.size() == (n, k, k)
             assert k_index.size() == (n, k, k)
 
@@ -522,6 +522,12 @@ class BeamSearch3(Forecaster):
 
             # Restore origin beams indices
             rows, cols = positions // k, positions % k
+
+            # Eliminate and order beams in decoder's cache
+            indices = (torch.arange(self.n, device=self.device).\
+                unsqueeze(-1) * self.k + rows).view(-1)
+            self.decoder.reorder_beams(indices)
+
             it = torch.arange(n).unsqueeze(-1)
             sents[:t] = sents[:t, it, rows]
             sents[t] = k_index[it, rows, cols]

@@ -13,6 +13,10 @@ def _get_activation_fn(activation):
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
+def _concate(x, y, dim=0):
+    return torch.cat((x, y), dim=dim)
+
+
 class MultiAttention(nn.Module):
     def __init__(self, d_model=512, n_heads=8, dropout=0.1):
         super().__init__()
@@ -36,7 +40,7 @@ class MultiAttention(nn.Module):
         nn.init.constant_(self.in_proj_bias, 0.0)
 
     def forward(self, x_q, x_k, x_v, key_padding_mask=None, \
-        attn_mask=None, need_weights=False):
+        attn_mask=None, need_weights=False, cache=None):
         """
         Multi-head attention Module
         Arguments: 
@@ -55,6 +59,8 @@ class MultiAttention(nn.Module):
         assert x_v.size(1) == n
         assert x_v.size(0) == S
 
+        is_self_attn = False
+
         # Compute key, query, value matrices for each head
         # [(N * H) x L x d]
         # q = self.w_q(x_q)
@@ -63,6 +69,7 @@ class MultiAttention(nn.Module):
 
         if torch.equal(x_q, x_k) and torch.equal(x_q, x_v):
             # Self-Attention flow
+            is_self_attn = True
             q, k, v = F.linear(x_q, self.in_proj_weights, \
                 self.in_proj_bias).chunk(3, dim=-1)
         else:
@@ -75,36 +82,70 @@ class MultiAttention(nn.Module):
             _w = self.in_proj_weights[d_model:]
             _b = self.in_proj_bias[d_model:]
             k, v = F.linear(x_k, _w, _b).chunk(2, dim=-1)
-       
-        q = q.contiguous().view(T, n * n_heads, d_q).transpose(0, 1)
-        k = k.contiguous().view(S, n * n_heads, d_k).transpose(0, 1)
-        v = v.contiguous().view(S, n * n_heads, d_v).transpose(0, 1)
+        
+        if cache is not None:
+            m = cache["q"].size(1)
+            actives = cache["actives"]
+            zeros = torch.zeros((1, m, d_model), device=q.device)
+            cache["q"] = _concate(cache["q"], zeros, dim=0)
+            cache["q"][-1, actives] = q
+            if is_self_attn:
+                cache["k"] = _concate(cache["k"], zeros, dim=0)
+                cache["v"] = _concate(cache["v"], zeros, dim=0)
+                cache["k"][-1, actives] = k
+                cache["v"][-1, actives] = v
+                # Replace with full cache [T x N x d_model]
+                k, v = cache["k"][:, actives], cache["v"][:, actives]
 
-        q = q / math.sqrt(d_k)
-        # Scaled dot-product attention score [(N * H) x T x S]
-        score = torch.bmm(q, k.transpose(1, 2))
-        if attn_mask is not None:
-            # Mask attention
+        q = q.contiguous().view(-1, n * n_heads, d_q).transpose(0, 1)
+        k = k.contiguous().view(-1, n * n_heads, d_k).transpose(0, 1)
+        v = v.contiguous().view(-1, n * n_heads, d_v).transpose(0, 1)
+        
+        # if using cache: [(N * n_heads) x 1 x T]
+        # else: [(N * n_heads) x T x T]
+        score = torch.bmm(q, k.transpose(1, 2)) / math.sqrt(d_k)
+
+        if (cache is None) and (attn_mask is not None):
+            # Mask attention, turn off when using cache
             attn_mask = attn_mask.unsqueeze(0)
             score = score.masked_fill(attn_mask, float("-inf"))
         
         if key_padding_mask is not None:
-            # Key padding mask
-            score = score.view(n, n_heads, T, S)
+            # Key padding mask, useful when facing encoder-decoder attention
+            score = score.view(n, n_heads, -1, score.size(-1))
             score = score.masked_fill(
-                key_padding_mask.unsqueeze(1).unsqueeze(2), 
+                key_padding_mask.unsqueeze(1).unsqueeze(1), 
                 float("-inf"))
-            score = score.view(n * n_heads, T, S)
+            score = score.view(n * n_heads, -1, score.size(-1))
         
         # Softmax
         score = F.softmax(score, dim=-1)
+
+        if cache is not None:
+            m = cache["weights"].size(0)
+            actives = cache["actives"]
+            score = score.view(n, n_heads, -1, score.size(-1))
+            
+            if is_self_attn:
+                t = cache["weights"].size(-1)
+                zeros = torch.zeros((m, n_heads, t, 1), device=score.device)
+                cache["weights"] = _concate(cache["weights"], zeros, dim=-1)
+
+            t = cache["weights"].size(-1)
+            zeros = torch.zeros((m, n_heads, 1, t), device=score.device)
+            cache["weights"] = _concate(cache["weights"], zeros, dim=2)
+            cache["weights"][actives, :, -1] = score[:, :, -1]
+            score = score.view(n * n_heads, -1, score.size(-1))
+
         score = self.dropout(score)
         out = torch.bmm(score, v)
         # Concat
-        out = out.transpose(0, 1).contiguous().view(T, n, d_model)
+        out = out.transpose(0, 1).contiguous().view(-1, n, d_model)
         out = self.w_o(out)
         
         if need_weights:
+            if cache is not None:
+                raise ValueError("Currently not support return attention when using cache")
             # Average attention over heads
             return out, score.view(n, n_heads, T, S).mean(dim=1)
         else:
@@ -177,7 +218,8 @@ class DecoderLayer(nn.Module):
         self.dropout_3 = nn.Dropout(dropout)
     
     def forward(self, trg, memory, memory_mask, trg_mask, \
-        memory_key_padding_mask, trg_key_padding_mask):
+        memory_key_padding_mask, trg_key_padding_mask, \
+        attn_cache=None, need_weights=False):
         """
         Args:
             x (Tensor [T x N x d_model]) - Input tensor
@@ -186,21 +228,27 @@ class DecoderLayer(nn.Module):
             trg_mask (Tensor [T x T]) - Target mask
             memory_key_padding_mask (Tensor [N x S]) - Memory key padding mask
             trg_key_padding_mask (Tensor [N x T])
+            attn_cache (Dict[str, Tensor]) - Used for ultra-fast decoding (infer only)
         Returns:
             (Tensor [T x N x d_model], Tensor [N x T x S]) 
                 - Tuple contains output tensor and attention score
         """
+        self_attn, attn = None, None
+        if attn_cache is not None:
+            self_attn = attn_cache["self_attn"]
+            attn = attn_cache["attn"]
+
         # Self-Attention layer
         trg_2 , _= self.multi_att_1(trg, trg, trg, \
             key_padding_mask=trg_key_padding_mask, \
-            need_weights=False, attn_mask=trg_mask)
+            need_weights=False, attn_mask=trg_mask, cache=self_attn)
         trg = trg + self.dropout_1(trg_2)
         trg = self.norm_1(trg)
 
         # Encoder-Decoder Attention layer
         trg_2, score = self.multi_att_2(trg, memory, memory, \
             key_padding_mask=memory_key_padding_mask, \
-            need_weights=True, attn_mask=memory_mask)
+            need_weights=need_weights, attn_mask=memory_mask, cache=attn)
         trg = trg + self.dropout_2(trg_2)
         trg = self.norm_2(trg)
 
@@ -247,7 +295,8 @@ class Decoder(nn.Module):
         self.norm = nn.LayerNorm(d_model)
     
     def forward(self, trg, memory, memory_mask=None, trg_mask=None, \
-        memory_key_padding_mask=None, trg_key_padding_mask=None):
+        memory_key_padding_mask=None, trg_key_padding_mask=None, \
+        cache=None, need_weights=False):
         """
         Args:
             x (Tensor [T x N x d_model]) - Input tensor
@@ -256,85 +305,27 @@ class Decoder(nn.Module):
             trg_mask (Tensor [T x T]) - Target mask
             memory_key_padding_mask (Tensor [N x S]) - Memory key padding mask
             trg_key_padding_mask (Tensor [N x T])
+            cache (List[Dict[str, Tensor]]) - List of attn_cache of decoder layers
         Returns:
             (Tensor [T x N x d_model], list(Tensor [N x T x S])) 
                 - Tuple contains output tensor and attention scores of layers
         """
+        if cache is not None:
+            assert len(cache) == self.n_layers
+        else:
+            cache = [None] * self.n_layers
         out = trg
         scores = []
-        for mod in self.layers:
+        for mod, attn_cache in zip(self.layers, cache):
             out, score = mod(out, memory, memory_mask, trg_mask, \
-                memory_key_padding_mask, trg_key_padding_mask)
+                memory_key_padding_mask, trg_key_padding_mask, \
+                need_weights=need_weights, attn_cache=attn_cache)
             scores.append(score)
         out = self.norm(out)
-        return out, scores[-1]
+        if need_weights:
+            return out, scores[-1]
+        else:
+            return out, None
 
 
-from ..utils import generate_subsequent_mask
-
-
-class MemorizedDecoder(nn.Module):
-    """
-    Ultra fast decoder for BeamSearch powered by Dynamic Programming
-    """
-    def __init__(self, model, k, eos_token, sos_token, memory_info, batch_size):
-        super().__init__()
-        self.model = model
-        self.k = k
-        self.n = batch_size
-        self.eos_token = eos_token
-        self.sos_token = sos_token
-        self.cache = [dict({}) for _ in range(model.decoder.n_layers)]
-
-        self.memory = memory_info["memory"]
-        self.memories = self.memory.repeat_interleave(k, dim=1)
-
-        self.padding_mask = memory_info["memory_key_padding_mask"]
-        self.padding_masks = self.padding_mask.repeat_interleave(k, dim=1)
-    
-    def burn(self):
-        """Initialization for the first timestep"""
-        trg = torch.tensor([self.sos_token] * self.n, \
-            device=self.model.device).unsqueeze(0)
-        prob = self.decode(trg, self.memory, self.padding_mask)
-        return prob
-
-    def forward(self, trg):
-        """
-        Feed batch of target beams into Transformer decoder
-        Arguments:
-            trg: (Tensor [T x N x k]) Target input with it beams
-        Returns:
-            Tensor [N x k x trg_vocab_size]
-            - Probabilities distribution of the next generated target-side tokens
-        """
-        t, n, k = trg.size()
-        assert n == self.n and k == self.k
-
-        active_mask = (trg == self.eos_token).any(0).view(-1)
-        actives = torch.nonzero(active_mask==0).view(-1)
-        
-        probs = torch.zeros((n*k, self.model.trg_vocab_size), \
-            device=self.model.device, dtype=torch.float)
-        
-        flatten_trg = trg.view(t, -1)
-        probs[actives] = self.decode(flatten_trg[:, actives], 
-            self.memories[:, actives], self.padding_masks[:, actives])
-        return probs.view(n, k, -1)
-        
-    def decode(self, trg, memory, padding_mask=None):
-        # Embedding target tokens
-        trg = self.model.trg_embed(trg)
-        trg = self.model.pe(trg)
-
-        # Transformer output
-        trg_mask = generate_subsequent_mask(trg.size(0), self.model.device)
-        output, score = self.model.decoder(trg, memory, trg_mask=trg_mask, \
-            memory_key_padding_mask=padding_mask.t())
-
-        output = self.model.out(output)
-        output = F.softmax(output, dim=-1)
-
-        # only care prob from the last token [N x trg_vocab_size]
-        return output[-1]
 

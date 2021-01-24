@@ -68,7 +68,7 @@ train_config:
     beta: 0.0
 
 infer_config:
-  strategy: beam_search_3
+  strategy: beam_search
   batch_size: 64
   strategy_kwargs:
     k: 4

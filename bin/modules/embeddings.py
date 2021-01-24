@@ -18,12 +18,15 @@ class PositionalEncoding(nn.Module):
         pe.unsqueeze_(1)
         self.register_buffer("pe", pe, persistent=False)
 
-    def forward(self, x):
+    def forward(self, x, pos=None):
         """
         Arguments:
             x (Tensor): [len x N x d_model]
         """
         # Add pe to the input and dropout
         x = x * (self.d_model ** 0.5)
-        x = x + self.pe[:x.size(0)]
+        if pos is not None:
+            x = x + self.pe[pos]
+        else:
+            x = x + self.pe[:x.size(0)]
         return self.dropout(x)
