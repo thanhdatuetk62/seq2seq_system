@@ -85,17 +85,21 @@ class MultiAttention(nn.Module):
         
         if cache is not None:
             m = cache["q"].size(1)
-            actives = cache["actives"]
+            # actives = cache["actives"]
             zeros = torch.zeros((1, m, d_model), device=q.device)
             cache["q"] = _concate(cache["q"], zeros, dim=0)
-            cache["q"][-1, actives] = q
+            # cache["q"][-1, actives] = q
+            cache["q"][-1] = q
             if is_self_attn:
                 cache["k"] = _concate(cache["k"], zeros, dim=0)
                 cache["v"] = _concate(cache["v"], zeros, dim=0)
-                cache["k"][-1, actives] = k
-                cache["v"][-1, actives] = v
+                # cache["k"][-1, actives] = k
+                # cache["v"][-1, actives] = v
+                cache["k"][-1] = k
+                cache["v"][-1] = v
                 # Replace with full cache [T x N x d_model]
-                k, v = cache["k"][:, actives], cache["v"][:, actives]
+                # k, v = cache["k"][:, actives], cache["v"][:, actives]
+                k, v = cache["k"], cache["v"]
 
         q = q.contiguous().view(-1, n * n_heads, d_q).transpose(0, 1)
         k = k.contiguous().view(-1, n * n_heads, d_k).transpose(0, 1)
@@ -105,9 +109,8 @@ class MultiAttention(nn.Module):
         # else: [(N * n_heads) x T x T]
         score = torch.bmm(q, k.transpose(1, 2)) / math.sqrt(d_k)
 
-        if (cache is None) and (attn_mask is not None):
+        if  attn_mask is not None:
             # Mask attention, turn off when using cache
-            attn_mask = attn_mask.unsqueeze(0)
             score = score.masked_fill(attn_mask, float("-inf"))
         
         if key_padding_mask is not None:
@@ -120,23 +123,6 @@ class MultiAttention(nn.Module):
         
         # Softmax
         score = F.softmax(score, dim=-1)
-
-        if cache is not None:
-            m = cache["weights"].size(0)
-            actives = cache["actives"]
-            score = score.view(n, n_heads, -1, score.size(-1))
-            
-            if is_self_attn:
-                t = cache["weights"].size(-1)
-                zeros = torch.zeros((m, n_heads, t, 1), device=score.device)
-                cache["weights"] = _concate(cache["weights"], zeros, dim=-1)
-
-            t = cache["weights"].size(-1)
-            zeros = torch.zeros((m, n_heads, 1, t), device=score.device)
-            cache["weights"] = _concate(cache["weights"], zeros, dim=2)
-            cache["weights"][actives, :, -1] = score[:, :, -1]
-            score = score.view(n * n_heads, -1, score.size(-1))
-
         score = self.dropout(score)
         out = torch.bmm(score, v)
         # Concat

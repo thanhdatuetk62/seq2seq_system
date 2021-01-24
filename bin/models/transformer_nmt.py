@@ -137,7 +137,7 @@ class MemorizedDecoder(nn.Module):
     Ultra fast decoder for BeamSearch powered by Dynamic Programming
     """
     def __init__(self, model, k, eos_token, sos_token, memory_info, \
-        batch_size, src_len, device="cpu"):
+        batch_size, device="cpu"):
         super().__init__()
         self.model = model
         self.k = k
@@ -151,13 +151,11 @@ class MemorizedDecoder(nn.Module):
                 "q": torch.zeros(0, self.n, model.d_model, device=device), 
                 "k": torch.zeros(0, self.n, model.d_model, device=device), 
                 "v": torch.zeros(0, self.n, model.d_model, device=device), 
-                "weights": torch.zeros(self.n, model.n_heads, 0, 0, device=device),
-                "actives": torch.arange(self.n)
+                # "actives": torch.arange(self.n)
             },
             "attn": {
                 "q": torch.zeros(0, self.n, model.d_model, device=device), 
-                "weights": torch.zeros(self.n, model.n_heads, 0, src_len, device=device),
-                "actives": torch.arange(self.n)
+                # "actives": torch.arange(self.n)
             }
         } for _ in range(model.decoder.n_layers)]
 
@@ -177,10 +175,7 @@ class MemorizedDecoder(nn.Module):
             attn_cache["self_attn"]["q"] = attn_cache["self_attn"]["q"][:, i]
             attn_cache["self_attn"]["k"] = attn_cache["self_attn"]["k"][:, i]
             attn_cache["self_attn"]["v"] = attn_cache["self_attn"]["v"][:, i]
-            attn_cache["self_attn"]["weights"] = attn_cache["self_attn"]["weights"][i]
-
             attn_cache["attn"]["q"] = attn_cache["attn"]["q"][:, i]
-            attn_cache["attn"]["weights"] = attn_cache["attn"]["weights"][i]
 
     def burn(self):
         """Initialization for the first timestep"""
@@ -203,17 +198,19 @@ class MemorizedDecoder(nn.Module):
         t, n, k = trg.size()
         assert n == self.n and k == self.k
 
-        active_mask = (trg == self.eos_token).any(0).view(-1)
-        actives = torch.nonzero(active_mask==0).view(-1)
+        # active_mask = (trg == self.eos_token).any(0).view(-1)
+        # actives = torch.nonzero(active_mask==0).view(-1)
 
-        for attn_cache in self.cache:
-            attn_cache["self_attn"]["actives"] = actives
-            attn_cache["attn"]["actives"] = actives
+        # for attn_cache in self.cache:
+        #     attn_cache["self_attn"]["actives"] = actives
+        #     attn_cache["attn"]["actives"] = actives
         
         probs = torch.zeros((n*k, self.model.trg_vocab_size), \
             device=self.device, dtype=torch.float)
         
         flatten_trg = trg.view(t, -1)
-        probs[actives] = self.model.decode(flatten_trg[:, actives], \
-            self.memories[:, actives], self.padding_masks[:, actives], self.cache)
+        # probs[actives] = self.model.decode(flatten_trg[:, actives], \
+        #     self.memories[:, actives], self.padding_masks[:, actives], self.cache)
+        probs = self.model.decode(flatten_trg, \
+            self.memories, self.padding_masks, self.cache)
         return probs.view(n, k, -1)

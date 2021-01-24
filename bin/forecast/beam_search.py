@@ -471,7 +471,7 @@ class BeamSearch3(Forecaster):
         
         # Initialize decode class
         self.decoder = MemorizedDecoder(self.model, self.k, self.eos_token, \
-            self.sos_token, self.memory_info, n, src.size(0), self.device)
+            self.sos_token, self.memory_info, n, self.device)
         
     def _reset(self):
         """Free temporary variables after finishing one batch sentence"""
