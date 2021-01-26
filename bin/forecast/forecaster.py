@@ -20,7 +20,7 @@ class Forecaster(nn.Module):
         self.model.load_state_dict(state_dict["model"])
     
     @torch.no_grad()
-    def infer_from_file(self, src_path, save_path, batch_size):    
+    def infer_from_file(self, src_path, save_path, batch_size, n_tokens=None):    
         """
         Infer from source file (required pre-tokenized in this file) and save 
         predicted sentences to target file .
@@ -33,7 +33,7 @@ class Forecaster(nn.Module):
         with io.open(src_path, 'r', encoding="utf-8") as fi, \
              io.open(save_path, 'w', encoding="utf-8") as fo:
             # Load src sents from file
-            src_sents = [sent.strip().split() for sent in fi]
+            src_sents = [sent.strip() for sent in fi]
 
             # Init some local vars
             total_n_sents = len(src_sents)
@@ -44,7 +44,8 @@ class Forecaster(nn.Module):
                             prefix="INFER", suffix="DONE", time_used=0)
 
             # Create batch iterator
-            batch_iter = self.data.create_infer_iter(src_sents, batch_size)
+            batch_iter = self.data.create_infer_iter(src_sents, batch_size, \
+                n_tokens=n_tokens)
             for src in batch_iter:
                 # Append generated result to final results
                 trg_sents += [' '.join(self.data.convert_to_str(tokens))

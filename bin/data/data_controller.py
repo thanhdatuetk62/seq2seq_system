@@ -1,4 +1,5 @@
-from torchtext.data import Field, BucketIterator, Iterator
+from torchtext.data import Field, BucketIterator, Example
+from .iterators import Iterator, dynbatch, exbatch
     
 import os, io, torch
 
@@ -10,6 +11,7 @@ class DataController(object):
     def __init__(self, dataset="translation", \
                        train_ds_kwargs={}, valid_ds_kwargs={}, \
                        train_batch_sz=32, valid_batch_sz=32, \
+                       train_n_tokens=None, valid_n_tokens=None, \
                        src_vocab_max_size=None, trg_vocab_max_size=None, \
                        src_vocab_min_freq=1, trg_vocab_min_freq=1, \
                        save_dir=None, train=True, \
@@ -33,7 +35,8 @@ class DataController(object):
                     **train_ds_kwargs)
                 # Build train iterator
                 self.train_iter = self.create_iterator(train_ds, \
-                    train=True, batch_size=train_batch_sz, device=device)
+                    train=True, batch_size=train_batch_sz, \
+                    n_tokens=train_n_tokens, device=device)
             except:
                 raise OSError("Training data not found.")
             # Build valid dataset
@@ -42,7 +45,8 @@ class DataController(object):
                     **valid_ds_kwargs)
                 # Build valid iterator      
                 self.valid_iter = self.create_iterator(valid_ds, \
-                    train=False, batch_size=valid_batch_sz, device=device)
+                    train=False, batch_size=valid_batch_sz, \
+                    n_tokens=valid_n_tokens, device=device)
             except:
                 print("[WARNING] No validation dataset specified.")
             
@@ -68,21 +72,26 @@ class DataController(object):
             self.src_field.vocab = self.src_vocab
             self.trg_field.vocab = self.trg_vocab
     
-    def create_infer_iter(self, src_sents, batch_size=32):
+    def create_infer_iter(self, src_sents, batch_size=32, n_tokens=None):
         """
         Create iterator for inference
         """
-        filtered_src_sents = []
+        examples = []
         for sent in src_sents:
-            if len(sent) > 0:
-                filtered_src_sents.append(sent)
-        for i in range(0, len(filtered_src_sents), batch_size):
-            batch = filtered_src_sents[i: i+batch_size]
-            yield self.src_field.process(batch, device=self.device)
+            examples.append(Example.fromlist([sent], [("src", self.src_field)]))
+        if n_tokens is not None:
+            batches = dynbatch(n_tokens, examples, {"src": self.src_field})
+        else:
+            batches = exbatch(batch_size, examples)
+        
+        for batch in batches:
+            yield self.src_field.process([getattr(x, "src") for x in batch], \
+                device=self.device)
 
-    def create_iterator(self, ds, batch_size=32, train=True, device="cpu"):
-        return BucketIterator(ds, batch_size, train=train, sort=False, device=device)
-
+    def create_iterator(self, ds, batch_size=32, n_tokens=None, train=True, \
+        device="cpu"):
+        return Iterator(ds, batch_size, n_tokens, train, device)
+    
     def convert_to_str(self, sent_id):
         eos_token = self.trg_vocab.stoi["<eos>"]
         eos = torch.nonzero(sent_id == eos_token).view(-1)

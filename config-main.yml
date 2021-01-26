@@ -13,6 +13,8 @@ data_kwargs:
 
   train_batch_sz: 64
   valid_batch_sz: 64
+  train_n_tokens: 4069
+  valid_n_tokens: 4069
 
   src_vocab_min_freq: 2
   trg_vocab_min_freq: 2
@@ -69,7 +71,8 @@ train_config:
 
 infer_config:
   strategy: beam_search_3
-  batch_size: 64
+  batch_size: 32
+  n_tokens: 1024
   strategy_kwargs:
     k: 4
     max_len: 160

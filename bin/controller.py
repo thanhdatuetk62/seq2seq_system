@@ -56,7 +56,7 @@ class Controller(object):
         trainer.run()
 
     def infer(self, src_path, save_path='output.txt', ckpt=None, \
-            batch_size=32, strategy="beam_search", strategy_kwargs={}):
+            batch_size=32, n_tokens=None, strategy="beam_search", strategy_kwargs={}):
         """
         Frontend infer command. Please refer internal implementation of 
         Forecaster for more details.
@@ -74,7 +74,8 @@ class Controller(object):
             state_dict = torch.load(ckpt_file)
             forecaster.load_state_dict(state_dict)
             print("Done!")
-        forecaster.infer_from_file(src_path, save_path, batch_size)
+        forecaster.infer_from_file(src_path, save_path, batch_size=batch_size, \
+            n_tokens=n_tokens)
 
     def compile(self, ckpt=None, export_path="export.pt", \
         strategy="beam_search", strategy_kwargs={}, **kwargs):
