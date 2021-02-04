@@ -23,7 +23,7 @@ class MultiAttention(nn.Module):
         assert d_model % n_heads == 0
         self.d_model = d_model
         self.n_heads = n_heads
-
+        
         # self.w_q = Linear(d_model, d_model)
         # self.w_k = Linear(d_model, d_model)
         # self.w_v = Linear(d_model, d_model)
@@ -40,7 +40,7 @@ class MultiAttention(nn.Module):
         nn.init.constant_(self.in_proj_bias, 0.0)
 
     def forward(self, x_q, x_k, x_v, key_padding_mask=None, \
-        attn_mask=None, need_weights=False, cache=None):
+        attn_mask=None, need_weights=False, cache=None, actives=None):
         """
         Multi-head attention Module
         Arguments: 
@@ -59,7 +59,7 @@ class MultiAttention(nn.Module):
         assert x_v.size(1) == n
         assert x_v.size(0) == S
 
-        is_self_attn = False
+        is_self_attn = torch.equal(x_q, x_k) and torch.equal(x_q, x_v)
 
         # Compute key, query, value matrices for each head
         # [(N * H) x L x d]
@@ -67,7 +67,7 @@ class MultiAttention(nn.Module):
         # k = self.w_k(x_k)
         # v = self.w_v(x_v)
 
-        if torch.equal(x_q, x_k) and torch.equal(x_q, x_v):
+        if is_self_attn:
             # Self-Attention flow
             is_self_attn = True
             q, k, v = F.linear(x_q, self.in_proj_weights, \
@@ -83,23 +83,28 @@ class MultiAttention(nn.Module):
             _b = self.in_proj_bias[d_model:]
             k, v = F.linear(x_k, _w, _b).chunk(2, dim=-1)
         
+        # Caching mechanism, Only be used when inferencing
         if cache is not None:
             m = cache["q"].size(1)
-            # actives = cache["actives"]
             zeros = torch.zeros((1, m, d_model), device=q.device)
-            cache["q"] = _concate(cache["q"], zeros, dim=0)
-            # cache["q"][-1, actives] = q
-            cache["q"][-1] = q
+
+            if actives is not None:
+                cache["q"] = _concate(cache["q"], zeros, dim=0)
+                cache["q"][-1, actives] = q
+            else:
+                cache["q"][-1] = _concate(cache["q"], q, dim=0)
+            
             if is_self_attn:
-                cache["k"] = _concate(cache["k"], zeros, dim=0)
-                cache["v"] = _concate(cache["v"], zeros, dim=0)
-                # cache["k"][-1, actives] = k
-                # cache["v"][-1, actives] = v
-                cache["k"][-1] = k
-                cache["v"][-1] = v
-                # Replace with full cache [T x N x d_model]
-                # k, v = cache["k"][:, actives], cache["v"][:, actives]
-                k, v = cache["k"], cache["v"]
+                if actives is not None:
+                    cache["k"] = _concate(cache["k"], zeros, dim=0)
+                    cache["v"] = _concate(cache["v"], zeros, dim=0)
+                    cache["k"][-1, actives] = k
+                    cache["v"][-1, actives] = v
+                    k, v = cache["k"][:, actives], cache["v"][:, actives]
+                else:
+                    cache["k"][-1] = _concate(cache["k"], k, dim=0)
+                    cache["v"][-1] = _concate(cache["v"], v, dim=0)
+                    k, v = cache["k"], cache["v"]
 
         q = q.contiguous().view(-1, n * n_heads, d_q).transpose(0, 1)
         k = k.contiguous().view(-1, n * n_heads, d_k).transpose(0, 1)
@@ -205,7 +210,7 @@ class DecoderLayer(nn.Module):
     
     def forward(self, trg, memory, memory_mask, trg_mask, \
         memory_key_padding_mask, trg_key_padding_mask, \
-        attn_cache=None, need_weights=False):
+        attn_cache=None, actives=None, need_weights=False):
         """
         Args:
             x (Tensor [T x N x d_model]) - Input tensor
@@ -227,14 +232,16 @@ class DecoderLayer(nn.Module):
         # Self-Attention layer
         trg_2 , _= self.multi_att_1(trg, trg, trg, \
             key_padding_mask=trg_key_padding_mask, \
-            need_weights=False, attn_mask=trg_mask, cache=self_attn)
+            need_weights=False, attn_mask=trg_mask, \
+            cache=self_attn, actives=actives)
         trg = trg + self.dropout_1(trg_2)
         trg = self.norm_1(trg)
 
         # Encoder-Decoder Attention layer
         trg_2, score = self.multi_att_2(trg, memory, memory, \
             key_padding_mask=memory_key_padding_mask, \
-            need_weights=need_weights, attn_mask=memory_mask, cache=attn)
+            need_weights=need_weights, attn_mask=memory_mask, \
+            cache=attn, actives=actives)
         trg = trg + self.dropout_2(trg_2)
         trg = self.norm_2(trg)
 
@@ -282,7 +289,7 @@ class Decoder(nn.Module):
     
     def forward(self, trg, memory, memory_mask=None, trg_mask=None, \
         memory_key_padding_mask=None, trg_key_padding_mask=None, \
-        cache=None, need_weights=False):
+        cache=None, actives=None, need_weights=False):
         """
         Args:
             x (Tensor [T x N x d_model]) - Input tensor
@@ -300,12 +307,14 @@ class Decoder(nn.Module):
             assert len(cache) == self.n_layers
         else:
             cache = [None] * self.n_layers
+        
         out = trg
         scores = []
         for mod, attn_cache in zip(self.layers, cache):
             out, score = mod(out, memory, memory_mask, trg_mask, \
                 memory_key_padding_mask, trg_key_padding_mask, \
-                need_weights=need_weights, attn_cache=attn_cache)
+                need_weights=need_weights, attn_cache=attn_cache, \
+                actives=actives)
             scores.append(score)
         out = self.norm(out)
         if need_weights:

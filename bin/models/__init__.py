@@ -1,4 +1,4 @@
-from .transformer_nmt import TransformerNMT, MemorizedDecoder
+from .transformer_nmt import TransformerNMT, DecodeSupport
 
 models = {"transformer_nmt": TransformerNMT}
 

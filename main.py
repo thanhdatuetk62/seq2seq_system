@@ -29,11 +29,14 @@ parser.add_argument("--save_dir", type=str, default='.', \
 parser.add_argument("--checkpoint", type=int, default=None, \
     help="Load specified checkpoint of training")
 
-parser.add_argument("--infer_src_path", type=str, \
+parser.add_argument("--src_path", type=str, \
     help="[infer] Path to src file which needed for inference")
 
-parser.add_argument("--infer_save_path", type=str, default="output.txt", \
+parser.add_argument("--save_path", type=str, default="output.txt", \
     help="[infer] Path to save file which is result of inference")
+
+parser.add_argument("--sos_token", type=str, default=None, \
+    help="[infer] Start of sequence target token")
 
 parser.add_argument("--export_path", type=str, default="export.pt", \
     help="[compile] Path to save TorchScript")
@@ -52,15 +55,16 @@ def main():
                   .format(args.config))
     else:
         print("Using default config.")
-    controller = Controller(mode=args.mode, save_dir=args.save_dir, **options)
+    controller = Controller(device=options.get("device", "cpu"), \
+        save_dir=options.get("save_dir", "run"), \
+        keep_checkpoints=options.get("keep_checkpoints", 100))
     if args.mode == "train":
-        train_config = options.get("train_config", {})
-        controller.train(ckpt=args.checkpoint, train_config=train_config)
+        controller.train(ckpt=args.checkpoint, **options)
     if args.mode == "infer":
-        infer_config = options.get("infer_config", {})
-        controller.infer(src_path=args.infer_src_path,
-                         save_path=args.infer_save_path, 
-                         ckpt=args.checkpoint, **infer_config)
+        controller.infer(src_path=args.src_path,
+                         save_path=args.save_path, 
+                         sos_token=args.sos_token,
+                         ckpt=args.checkpoint, **options)
     if args.mode == "compile":
         infer_config = options.get("infer_config", {})
         controller.compile(ckpt=args.checkpoint, \

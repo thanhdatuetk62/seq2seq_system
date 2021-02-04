@@ -1,26 +1,32 @@
 import time
 import torch
+import warnings
 from torch import nn
-from torch.optim import optimizer
 
 from .optim import find_optimizer, find_scheduler
+from ..data import DataController
+from ..models import find_model
 from ..metrics import find_eval_metric, find_loss_metric
-from ..forecast import find_forecast_strategy
+from ..forecast.strategies import find_forecast_strategy
 from ..utils import print_progress
+from ..data import EagerLoader, LazyLoader
 
 from torch.cuda.amp import GradScaler, autocast
 
 class Trainer(nn.Module):
-    def __init__(self, controller, optimizer="adam", optimizer_kwargs={},
+    def __init__(self, controller, data_kwargs={}, model="transformer_nmt", 
+                 model_kwargs={}, lazy=False, cache_lines=1e6, 
+                 train_batch_sz=32, valid_batch_sz=32, 
+                 train_n_tokens=None, valid_n_tokens=None,
+                 train_ds_kwargs={}, valid_ds_kwargs={}, 
+                 optimizer="adam", optimizer_kwargs={},
                  scheduler="noam", scheduler_kwargs={},
                  loss_metric="xent", loss_kwargs={}, 
                  eval_metric=None, strategy=None, strategy_kwargs={},
                  n_epochs=50, report_steps=200, valid_epochs=1, eval_epochs=1, 
-                 save_checkpoint_epochs=1, use_float32=False):
+                 save_checkpoint_epochs=1, use_float32=False, **kwargs):
         super().__init__()
         self.controller = controller
-        self.data = controller.data
-        self.model = controller.model
         self.epoch = -1
         self.n_epochs = n_epochs
         self.report_steps = report_steps
@@ -28,9 +34,35 @@ class Trainer(nn.Module):
         self.eval_epochs = eval_epochs
         self.save_checkpoint_epochs = save_checkpoint_epochs
         self.use_float32 = use_float32
+        self.device = controller.device
+        self.data = DataController(save_dir=controller.save_dir, \
+            device=self.device, **data_kwargs)
+
+        if lazy:
+            self.train_loader = LazyLoader(train_ds_kwargs, \
+                cache_lines=cache_lines, n_tokens=train_n_tokens, \
+                batch_size=train_batch_sz, train=True)
+        else:
+            self.train_loader = EagerLoader(train_ds_kwargs, \
+                n_tokens=train_n_tokens, batch_size=train_batch_sz, train=True)
+
+        self.valid_loader = EagerLoader(valid_ds_kwargs, \
+            n_tokens=valid_n_tokens, batch_size=valid_batch_sz)
+
+        if not self.data.load_vocab():
+            # Load vocab from save_dir failed, building from scratch
+            warnings.warn("Build vocabulary from training corpora instead!")
+            src_vocab, trg_vocab = self.train_loader.build_vocab(\
+                **self.data.build_vocab_kwargs)
+            # Save vocab to file
+            self.data.save_vocab(src_vocab, trg_vocab)
+
+        # Model must be built after loading vocabulary, otherwise raise Error
+        self.model = find_model(model)(data=self.data, device=self.device, \
+            **model_kwargs)
 
         # Define optimizer/scheduler
-        optimizer = find_optimizer(optimizer)(self.parameters(), \
+        optimizer = find_optimizer(optimizer)(self.model.parameters(), \
             **optimizer_kwargs)
         # Create learning rate scheduler
         if scheduler is not None:
@@ -48,7 +80,8 @@ class Trainer(nn.Module):
         if eval_metric is not None:
             self.eval_metric = find_eval_metric(eval_metric)
             self.strategy = find_forecast_strategy(strategy)(\
-                controller=controller, **strategy_kwargs)
+                data=self.data, model=self.model, device=self.device, \
+                **strategy_kwargs)
     
     def state_dict(self):
         return {
@@ -69,8 +102,10 @@ class Trainer(nn.Module):
         
         self.model.train()
         print("Start training ...")
+        
+        # Avoid not enough float precision using scaler if using FP32
         scaler = GradScaler() if self.use_float32 else None
-        total_n_sents = len(self.data.train_iter.dataset)
+        total_n_sents = len(self.train_loader)
         while self.epoch + 1 < self.n_epochs:
             self.epoch += 1
             report_time = time.perf_counter()
@@ -82,8 +117,8 @@ class Trainer(nn.Module):
                            prefix="EPOCH {}".format(self.epoch),
                            suffix="DONE", time_used=0)
             
-            self.data.train_iter.init_epoch()
-            for step, batch in enumerate(self.data.train_iter):
+            train_iter = self.data.create_iter(self.train_loader)
+            for step, batch in enumerate(train_iter):
                 # Add loss value to the total loss
                 total_loss += self.train_step(batch.src, batch.trg, scaler)
                 # Update progress bar
@@ -107,7 +142,7 @@ class Trainer(nn.Module):
                 # Save checkpoint to file
                 self.controller.save_to_file(self.state_dict(), ckpt=self.epoch)
 
-            if self.data.valid_iter is None:
+            if len(self.valid_loader) == 0:
                 # No validation dataset, ignore validate and evaluate step
                 continue
 
@@ -164,9 +199,9 @@ class Trainer(nn.Module):
     def validate(self):
         print("Running Validation ...")
         self.eval()
-
+        iter = self.data.create_iter(self.valid_loader)
         loss, m = 0.0, 0
-        for batch in self.data.valid_iter:
+        for batch in iter:
             # loss = self.model.loss_step(src, trg, self.loss_metric)
             out = self.model(batch.src, batch.trg[:-1])
 
@@ -183,24 +218,26 @@ class Trainer(nn.Module):
     def evaluate(self):
         print("Running evaluation ...")
         self.eval()
-        total_n_sents = len(self.data.valid_iter.dataset)
+        iter = self.data.create_iter(self.valid_loader)
+        total_n_sents = len(self.valid_loader)
         n_sents = 0
         start_time = time.perf_counter()
         print_progress(n_sents, total_n_sents, max_len=40,
                        prefix="EVAL", suffix="DONE", time_used=0)
 
-        ignores = {self.data.trg_vocab.stoi["<sos>"], 
-                   self.data.trg_vocab.stoi["<eos>"],
+        ignores = {self.data.trg_vocab.stoi["<eos>"],
                    self.data.trg_vocab.stoi["<pad>"]}
 
         candidate_corpus, references_corpus = [], []
 
-        for batch in self.data.valid_iter:
+        for batch in iter:
             # Generate targe tokens
+            sos_tokens = batch.trg[0]
+            x, y = batch.src[:, 0], batch.trg[:, 0]
             c = [self.data.convert_to_str(sent) 
-                 for sent in self.strategy(batch.src)]
+                 for sent in self.strategy(batch.src, sos_tokens)]
             r = [[[self.data.trg_vocab.itos[j] for j in sent 
-                   if j.item() not in ignores]] for sent in batch.trg.t()]
+                   if j.item() not in ignores]] for sent in batch.trg[1:].t()]
             candidate_corpus += c
             references_corpus += r
             
@@ -209,4 +246,5 @@ class Trainer(nn.Module):
             time_used = time.perf_counter() - start_time
             print_progress(n_sents, total_n_sents, max_len=40,
                            prefix="EVAL", suffix="DONE", time_used=time_used)
+        print(candidate_corpus[0], references_corpus[0][0])
         return self.eval_metric(candidate_corpus, references_corpus)

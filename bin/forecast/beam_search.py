@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 from .forecaster import Forecaster
-from ..models import MemorizedDecoder
 
 
 class BeamSearch(Forecaster):
@@ -27,7 +26,6 @@ class BeamSearch(Forecaster):
         self.gamma = gamma
 
         sent = torch.zeros(max_len, 1, k, dtype=torch.long)
-        sent[0] = self.sos_token
         self.register_buffer("sent", sent, persistent=False)
 
         score = torch.zeros((1, k), dtype=torch.float)
@@ -42,13 +40,13 @@ class BeamSearch(Forecaster):
         # Init tmp vars
         self._reset()
     
-    def forward(self, src):
+    def forward(self, src, sos_tokens=None):
         """
         Infer a source batch sentence
         Arguments:
             src: (Tensor [S x N])
         """
-        self._initialize(src)
+        self._initialize(src, sos_tokens)
         # Algorithm starts here
         for t in range(1, self.max_len):
             # All beams from all batches terminated, early stopping process
@@ -57,8 +55,7 @@ class BeamSearch(Forecaster):
             if t == 1:
                 # if cur_len = 1, run for the first tokens of k beams
                 probs, attn_score = self.model.infer_step(
-                    torch.tensor([self.sos_token] * len(self.q), \
-                        device=self.device).unsqueeze(0), self.memory_info)
+                    self.sos_tokens.unsqueeze(0), self.memory_info)
             else:
                 probs, attn_score = self.model.infer_step(
                     self.sents[:t, self.q].view(t, -1), self.memories_info)
@@ -72,15 +69,19 @@ class BeamSearch(Forecaster):
         self.memories_info = {k : v[:, self.q].repeat_interleave(self.k, dim=1) \
             for k, v in self.memory_info.items()}
 
-    def _initialize(self, src):
+    def _initialize(self, src, sos_tokens=None):
         """Create some useful temporary variables for inference"""
-        # Encoder output
         n = src.size(1)
+        self.sos_tokens = sos_tokens if sos_tokens is not None \
+            else torch.tensor([self.sos_token] * n, device=self.device)
+        
         self.memory_info = self.model.encode(src)
         self.q = torch.arange(n).long()
 
         # Scale up attributes to batch size (N), they change after each batch
         self.sents = self.sent.repeat(1, n, 1)
+        self.sents[0] = self.sos_tokens.view(-1, 1)
+
         self.scores = self.score.repeat(n, 1)
         self.are_done = self.is_done.repeat(n)
 
@@ -94,6 +95,7 @@ class BeamSearch(Forecaster):
         """Free temporary variables after finishing one batch sentence"""
         self.sents = None
         self.scores = None
+        self.sos_tokens = None
         self.are_done = None
         self.memory_info = None
         self.memories_info = None
@@ -236,7 +238,6 @@ class BeamSearch2(Forecaster):
         self.gamma = gamma
 
         sent = torch.zeros(max_len, 1, k, dtype=torch.long)
-        sent[0] = self.sos_token
         self.register_buffer("sent", sent, persistent=False)
 
         score = torch.zeros((1, k), dtype=torch.float)
@@ -247,13 +248,13 @@ class BeamSearch2(Forecaster):
         # Init tmp vars
         self._reset()
     
-    def forward(self, src):
+    def forward(self, src, sos_token=None):
         """
         Infer a source batch sentence
         Arguments:
             src: (Tensor [S x N])
         """
-        self._initialize(src)
+        self._initialize(src, sos_token)
         # Algorithm starts here
         for t in range(1, self.max_len):
             # All beams from all batches terminated, early stopping
@@ -273,8 +274,14 @@ class BeamSearch2(Forecaster):
         self._reset()
         return results
 
-    def _initialize(self, src):
+    def _initialize(self, src, sos_token=None):
         """Create some useful temporary variables for inference"""
+        if sos_token is not None:
+            self.sos_token = sos_token
+            self.sent[0] = sos_token
+        else:
+            self.sos_token = self.default_sos_token
+            self.sent[0] = self.default_sos_token
         # Encoder output
         n = src.size(1)
         self.n = n

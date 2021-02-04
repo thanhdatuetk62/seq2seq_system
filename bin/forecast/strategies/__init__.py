@@ -1,7 +1,6 @@
-from .beam_search import BeamSearch, BeamSearch2
+from .beam_search import BeamSearch
 forecast_strategies = {
-    "beam_search": BeamSearch, 
-    "beam_search_2": BeamSearch2
+    "beam_search": BeamSearch,
 }
 
 def find_forecast_strategy(strategy):

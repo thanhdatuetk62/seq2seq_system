@@ -2,19 +2,28 @@ import io
 import time
 import torch
 from torch import nn
+from ..models import find_model
+from ..data import DataController
 from ..utils import print_progress
 
+
 class Forecaster(nn.Module):
-    def __init__(self, controller):
+    def __init__(self, controller, data_kwargs, model, model_kwargs, \
+        sos_token="<sos>", device="cpu"):
         super().__init__()
         self.controller = controller
-        self.model = controller.model
-        self.data = controller.data
-        self.device = controller.device
-        
-        # Define decode strategy
-        self.sos_token = self.data.trg_vocab.stoi["<sos>"]
+        self.device = device
+        self.data = DataController(save_dir=controller.save_dir, \
+            device=self.device, **data_kwargs)
+        if not self.data.load_vocab():
+            raise RuntimeError("Cannot load vocab. Inference terminated!")
+
+        self.sos_token = self.data.trg_vocab.stoi[sos_token]
         self.eos_token = self.data.trg_vocab.stoi["<eos>"]
+        
+        # Model must be built after loading vocabulary, otherwise raise Error
+        self.model = find_model(model)(data=self.data, device=device, \
+            **model_kwargs)
     
     def load_state_dict(self, state_dict):
         self.model.load_state_dict(state_dict["model"])

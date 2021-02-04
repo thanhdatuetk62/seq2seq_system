@@ -7,6 +7,7 @@ CHECKPOINT=17
 
 python main.py infer --save_dir $MODEL_DIR \
                      --config $CONFIG_FILE \
-                     --infer_src_path $SRC_PATH \
-                     --infer_save_path $SAVE_PATH \
+                     --src_path $SRC_PATH \
+                     --save_path $SAVE_PATH \
+                     --sos_token "<vi>" \
                     #  --checkpoint $CHECKPOINT

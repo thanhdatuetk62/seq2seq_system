@@ -4,28 +4,18 @@ import os
 import io
 import re
 
-from .models import find_model
 from .train import Trainer
-from .data import DataController
 from .forecast import find_forecast_strategy
 
 
 class Controller(object):
-    def __init__(self, mode, model, model_kwargs={}, data_kwargs={},
-                 device="cpu", save_dir='./run', keep_checkpoints=100, **kwargs):
-
+    def __init__(self, device="cpu", save_dir='./run', keep_checkpoints=100):
         # Make directory for saving checkpoints and vocab
+        self.device = device
         self.save_dir = save_dir
         if not isinstance(save_dir, str) or \
                 not os.path.isdir(self.save_dir):
-            os.mkdir(self.save_dir)
-
-        self.data = DataController(save_dir=self.save_dir,
-                                   train=(mode == "train"),
-                                   device=device, **data_kwargs)
-        self.model = find_model(model)(data=self.data, device=device, \
-            **model_kwargs)
-        self.device = device
+            os.makedirs(self.save_dir)
         self.keep_checkpoints = keep_checkpoints
     
     def save_to_file(self, state_dict, ckpt=0):
@@ -42,8 +32,9 @@ class Controller(object):
             os.remove(name)
             print("Removed checkpoint {} from save_dir".format(name))
     
-    def train(self, train_config, ckpt=None):
-        trainer = Trainer(self, **train_config)
+    def train(self, data_kwargs, model, model_kwargs, train_config, \
+        ckpt=None, **kwargs):
+        trainer = Trainer(self, data_kwargs, model, model_kwargs, **train_config)
         trainer.to(self.device)
         # Load checkpoint
         ckpt_file = self._select_checkpoint(ckpt=ckpt)
@@ -55,8 +46,9 @@ class Controller(object):
         # Run train
         trainer.run()
 
-    def infer(self, src_path, save_path='output.txt', ckpt=None, \
-            batch_size=32, n_tokens=None, strategy="beam_search", strategy_kwargs={}):
+    def infer(self, data_kwargs, model, model_kwargs, src_path, \
+            save_path='output.txt', ckpt=None, infer_config={}, \
+            sos_token=None, **kwargs):
         """
         Frontend infer command. Please refer internal implementation of 
         Forecaster for more details.
@@ -64,8 +56,14 @@ class Controller(object):
             ckpt: (int) - Index of checkpoint to load
             ...
         """
+        strategy = infer_config["strategy"]
+        strategy_kwargs = infer_config["strategy_kwargs"]
+        batch_size = infer_config.get("batch_size", 32)
+        n_tokens = infer_config.get("n_tokens", None)
+        
         forecaster = find_forecast_strategy(strategy)(controller=self, \
-            **strategy_kwargs)
+            data_kwargs=data_kwargs, model=model, model_kwargs=model_kwargs, \
+            sos_token=sos_token, device=self.device, **strategy_kwargs)
         forecaster.to(self.device)
         # Load checkpoint
         ckpt_file = self._select_checkpoint(ckpt=ckpt)

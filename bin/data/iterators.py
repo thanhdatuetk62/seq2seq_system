@@ -1,56 +1,142 @@
+import io
 from torchtext.data import Batch
+from torchtext.vocab import Vocab
 from random import shuffle
+from collections import Counter
 
-def exbatch(batch_size, examples):
-    batches = []
-    for i in range(0, len(examples), batch_size):
-        batches.append(examples[i:i+batch_size])
-    return batches
+def _filter(src, trg, src_max_len=None, trg_max_len=None):
+    """
+    Create filter_pred function for filtering out sentences \
+        whose length are greater than {max_len}. 
     
-def dynbatch(n_tokens, examples, fields):
-    cnt = {k: 0 for k in fields.keys()}
-    batches, batch = [], []
-    for ex in examples:
-        batch.append(ex)
-        for k in fields.keys():
-            if hasattr(ex, k):
-                val = getattr(ex, k)
-                assert type(val) == list
-                cnt[k] += len(val)
-        if max(cnt.values()) >= n_tokens:
+    Returns a callable max_len specified filter function
+    """
+    src_len = len(src.split())
+    trg_len = len(trg.split())
+    return (src_max_len is None or (src_len <= src_max_len)) \
+        and (trg_max_len is None or (trg_len <= trg_max_len))
+
+def _statistic(corpus):
+    """Get stats from parallel corpus"""
+    n_sents = 0
+    lengths = []
+    with io.open(corpus["src_path"], "r", encoding="utf-8") as sf, \
+         io.open(corpus["trg_path"], "r", encoding="utf-8") as tf:
+        for s, t in zip(sf, tf):
+            s = s.strip()
+            t = t.strip()
+            src_max_len = corpus.get("src_max_len", None)
+            trg_max_len = corpus.get("trg_max_len", None)
+            if s != "" and t != "" and _filter(s, t, src_max_len, trg_max_len):
+                lengths.append((len(s.split()), len(t.split())))
+                n_sents += 1
+    return {"n_sents": n_sents, "lengths": lengths}
+
+def dynamic_batch(n_tokens, id, lengths, keep_order=False, bound=256):
+    max_size = 0
+    batches, batch, cnt = [], [], 0
+    if not keep_order:
+        chunk = 10000
+        for i in range(0, len(id), chunk):
+            id[i:i+chunk] = sorted(id[i:i+chunk], key=lambda x: lengths[x])
+    for i in id:
+        if cnt + lengths[i] > n_tokens or len(batch) == bound:
             batches.append(batch)
-            batch = []
-            cnt = {k: 0 for k in fields.keys()}
+            max_size = max(max_size, len(batch))
+            batch, cnt = [], 0
+        cnt += lengths[i]
+        batch.append(i)
     if len(batch) > 0:
         batches.append(batch)
+        max_size = max(max_size, len(batch))
     return batches
 
+def standard_batch(batch_size, id, lengths, keep_order=True):
+    if not keep_order:
+        chunk = batch_size * 100
+        for i in range(0, len(id), chunk):
+            id[i:i+chunk] = sorted(id[i:i+chunk], key=lambda x: lengths[x])
+    for i in range(0, len(id), batch_size):
+        yield id[i:i+batch_size]
 
-class Iterator(object):
-    def __init__(self, ds, batch_size=64, n_tokens=None, train=False, device="cpu"):
-        self.ds = ds
-        self.batch_size = batch_size
-        self.n_tokens = n_tokens
+class EagerLoader(object):
+    def __init__(self, corpora, n_tokens=None, batch_size=32, train=False):
+        self.corpora = corpora
         self.train = train
-        self.device = device
-        
-        self.init_epoch()
+        self.n_tokens = n_tokens
+        self.batch_size = batch_size
+        self.stat = {k: _statistic(v) for k, v in corpora.items()}
+    
+    def build_vocab(self, src_min_freq=1, trg_min_freq=1, src_max_size=None, \
+        trg_max_size=None, src_specials=("<unk>", "<pad>"), \
+        trg_specials=("<unk>", "<pad>")):
+
+        print("Building vocab ...")
+        src_cnt, trg_cnt = Counter(), Counter()
+        for name, corpus in self.corpora.items():
+            print("Loading corpus {} ...".format(name), end=' ', flush=True)
+            with io.open(corpus["src_path"], "r", encoding="utf-8") as sf, \
+                 io.open(corpus["trg_path"], "r", encoding="utf-8") as tf:
+                for s, t in zip(sf, tf):
+                    s = s.strip()
+                    t = t.strip()
+                    if s != "" and t != "":
+                        src_cnt.update(s.split())
+                        trg_cnt.update(t.split())
+            print("Done!")
+        src_vocab = Vocab(src_cnt, src_max_size, src_min_freq, src_specials)
+        trg_vocab = Vocab(trg_cnt, trg_max_size, trg_min_freq, trg_specials)
+        return src_vocab, trg_vocab
+
+    def __len__(self):
+        return sum([stat["n_sents"] for _, stat in self.stat.items()])
 
     def __iter__(self):
-        self.init_epoch()
-    
-        examples = self.ds.examples
-        fields = self.ds.fields
+        n_sents = 0
+        lengths, corpora, sents = [], [], []
+        for corpus, stat in self.stat.items():
+            lengths += [max(k, v) for k, v in stat["lengths"]]
+            corpora.append(corpus)
+            n_sents += stat["n_sents"]
         
-        if self.n_tokens is not None:
-            batches = dynbatch(self.n_tokens, examples, fields)
-        else:
-            batches = exbatch(self.batch_size, examples)
+        print("\x1b[1K\rIterate over corpora in Eager mode", flush=True)
+        for name, corpus in self.corpora.items():
+            with io.open(corpus["src_path"], "r", encoding="utf-8") as sf, \
+                 io.open(corpus["trg_path"], "r", encoding="utf-8") as tf:
+                for i, (s, t) in enumerate(zip(sf, tf)):
+                    s = s.strip()
+                    t = t.strip()
+                    src_max_len = corpus.get("src_max_len", None)
+                    trg_max_len = corpus.get("trg_max_len", None)
+                    if s != "" and t != "" and _filter(s, t, src_max_len, trg_max_len):
+                        sents.append((s, t, corpus))
         
-        for batch in batches:
-            yield Batch(batch, dataset=self.ds, device=self.device)
-
-    def init_epoch(self):
+        id = [i for i in range(n_sents)]
         if self.train:
-            shuffle(self.ds.examples)
+            shuffle(id)
 
+        if self.n_tokens is not None:
+            for batch_id in dynamic_batch(self.n_tokens, id, lengths):
+                batch = [sents[i] for i in batch_id]
+                yield batch
+        else:
+            for batch_id in standard_batch(self.batch_size, id, lengths):
+                batch = [sents[i] for i in batch_id]
+                yield batch
+
+
+class LazyLoader(object):
+    def __init__(self, corpora):
+        self.corpora = corpora
+        self.train_stat = {k: _statistic(v, get_length=True) \
+            for k, v in corpora.items()}
+        
+    def _load_bilingual_examples(corpora):
+        examples, specials = [], {}
+        for name, corpus in corpora:
+            print("Loading corpus {}".format(corpus))
+            with io.open(corpus["src_path"], "r", encoding="utf-8") as f:
+                print("?")
+
+    def _load_multilingual_examples(corpora):
+        specials = {}

@@ -1,27 +1,22 @@
 data_kwargs:
-  dataset: translation
+  dataset: multilingual
+  
+  build_vocab_kwargs:
+    src_min_freq: 2
+    trg_min_freq: 2
+    # src_max_size: 8000
+    # trg_max_size: 8000
+    src_specials: 
+      - <pad>
+      - <unk>
+    trg_specials:
+      - <pad>
+      - <unk>
+      - <eos>
+      - <en>
+      - <vi>
 
-  train_ds_kwargs:
-    src_path: ../data/iwslt_en_vi/train.en
-    trg_path: ../data/iwslt_en_vi/train.vi 
-    src_max_len: 64
-    trg_max_len: 64
-
-  valid_ds_kwargs:
-    src_path: ../data/iwslt_en_vi/tst2013.en
-    trg_path: ../data/iwslt_en_vi/tst2013.vi
-
-  train_batch_sz: 64
-  valid_batch_sz: 64
-  train_n_tokens: 4069
-  valid_n_tokens: 4069
-
-  src_vocab_min_freq: 2
-  trg_vocab_min_freq: 2
-  # src_max_size: 8000
-  # trg_max_size: 8000
-
-
+  
 model: transformer_nmt
 model_kwargs:
   # Architecture config
@@ -37,6 +32,40 @@ model_kwargs:
 
 # Config for training
 train_config:
+  lazy: false
+  cache_lines: 1e6
+
+  train_ds_kwargs:
+    en_vi:
+      src_lang: en
+      trg_lang: vi
+      src_path: ../data/iwslt_en_vi/train.en
+      trg_path: ../data/iwslt_en_vi/train.vi 
+      src_max_len: 64
+      trg_max_len: 64
+    # vi_en:
+    #   src_lang: vi
+    #   trg_lang: en
+    #   src_path: ../data/iwslt_en_vi/train.vi
+    #   trg_path: ../data/iwslt_en_vi/train.en 
+    #   src_max_len: 64
+    #   trg_max_len: 64
+
+  valid_ds_kwargs:
+    en_vi:
+      src_lang: en
+      trg_lang: vi
+      src_path: ../data/iwslt_en_vi/tst2013.en
+      trg_path: ../data/iwslt_en_vi/tst2013.vi
+    # vi_en:
+    #   src_path: ../data/iwslt_en_vi/tst2013.vi
+    #   trg_path: ../data/iwslt_en_vi/tst2013.en
+
+  train_batch_sz: 64
+  valid_batch_sz: 64
+  # train_n_tokens: 4069
+  # valid_n_tokens: 4069
+
   optimizer: adam
   optimizer_kwargs:
     beta1: 0.9
@@ -58,7 +87,7 @@ train_config:
   report_steps: 200
   valid_epochs: 1
   eval_epochs: 1
-  save_checkpoint_epochs: 2
+  save_checkpoint_epochs: 1
   use_float32: true
 
   eval_metric: bleu
@@ -68,16 +97,22 @@ train_config:
     max_len: 160
     alpha: 0.6
     beta: 0.0
+    support_kwargs:
+      use_actives: true
+      use_cache: false
 
 infer_config:
-  strategy: beam_search_3
+  strategy: beam_search
   batch_size: 32
-  n_tokens: 1024
+  n_tokens: 2048
   strategy_kwargs:
     k: 4
     max_len: 160
     alpha: 0.6
     beta: 0.0
+    # support_kwargs:
+    #   use_actives: true
+    #   use_cache: false
 
 device: cuda
 keep_checkpoints: 5
