@@ -5,31 +5,35 @@ from torch import nn
 from ..models import find_model
 from ..data import DataController
 from ..utils import print_progress
-
+from .strategies import find_forecast_strategy
 
 class Forecaster(nn.Module):
     def __init__(self, controller, data_kwargs, model, model_kwargs, \
-        sos_token="<sos>", device="cpu"):
+        strategy=None, strategy_kwargs={}, sos_token="<sos>", device="cpu", \
+        batch_size=32, n_tokens=None):
         super().__init__()
         self.controller = controller
         self.device = device
+        self.batch_size = batch_size
+        self.n_tokens = n_tokens
         self.data = DataController(save_dir=controller.save_dir, \
             device=self.device, **data_kwargs)
         if not self.data.load_vocab():
             raise RuntimeError("Cannot load vocab. Inference terminated!")
 
-        self.sos_token = self.data.trg_vocab.stoi[sos_token]
-        self.eos_token = self.data.trg_vocab.stoi["<eos>"]
-        
         # Model must be built after loading vocabulary, otherwise raise Error
         self.model = find_model(model)(data=self.data, device=device, \
             **model_kwargs)
+
+        self.strategy = find_forecast_strategy(strategy)(\
+            data=self.data, model=self.model, device=self.device, \
+            sos_token=sos_token, **strategy_kwargs)
     
     def load_state_dict(self, state_dict):
         self.model.load_state_dict(state_dict["model"])
     
     @torch.no_grad()
-    def infer_from_file(self, src_path, save_path, batch_size, n_tokens=None):    
+    def infer_from_file(self, src_path, save_path):    
         """
         Infer from source file (required pre-tokenized in this file) and save 
         predicted sentences to target file .
@@ -53,12 +57,13 @@ class Forecaster(nn.Module):
                             prefix="INFER", suffix="DONE", time_used=0)
 
             # Create batch iterator
-            batch_iter = self.data.create_infer_iter(src_sents, batch_size, \
-                n_tokens=n_tokens)
+            batch_iter = self.data.create_infer_iter(src_sents, self.batch_size, \
+                n_tokens=self.n_tokens)
             for src in batch_iter:
+                trg = [' '.join(self.data.convert_to_str(tokens))
+                                for tokens in self.strategy(src)]
                 # Append generated result to final results
-                trg_sents += [' '.join(self.data.convert_to_str(tokens))
-                                for tokens in self(src)]
+                trg_sents += trg
                 # Update progress
                 n_sents += src.size(1)
                 time_used = time.perf_counter() - start_time

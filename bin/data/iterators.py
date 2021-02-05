@@ -1,5 +1,5 @@
 import io
-from torchtext.data import Batch
+from torchtext.data import Batch, interleave_keys
 from torchtext.vocab import Vocab
 from random import shuffle
 from collections import Counter
@@ -32,32 +32,56 @@ def _statistic(corpus):
                 n_sents += 1
     return {"n_sents": n_sents, "lengths": lengths}
 
-def dynamic_batch(n_tokens, id, lengths, keep_order=False, bound=256):
-    max_size = 0
-    batches, batch, cnt = [], [], 0
+
+def dynamic_batch(n_tokens, id, lengths, keep_order=False):
+    batch, cnt = [], 0
+    max_src, max_trg = 0, 0
     if not keep_order:
         chunk = 10000
         for i in range(0, len(id), chunk):
-            id[i:i+chunk] = sorted(id[i:i+chunk], key=lambda x: lengths[x])
-    for i in id:
-        if cnt + lengths[i] > n_tokens or len(batch) == bound:
-            batches.append(batch)
-            max_size = max(max_size, len(batch))
-            batch, cnt = [], 0
-        cnt += lengths[i]
-        batch.append(i)
-    if len(batch) > 0:
-        batches.append(batch)
-        max_size = max(max_size, len(batch))
-    return batches
+            p_id = sorted(id[i:i+chunk], \
+                key=lambda x: interleave_keys(*lengths[x]))
+            for i in p_id:
+                src_len, trg_len = lengths[i]
+                sz = max(max_src, max_trg, src_len, trg_len) * (cnt + 1)
+                if sz > n_tokens:
+                    yield batch
+                    batch, cnt = [], 0
+                    max_src, max_trg = 0, 0
+                cnt += 1
+                max_src = max(max_src, src_len)
+                max_trg = max(max_trg, trg_len)
+                batch.append(i)
+            if len(batch) > 0:
+                yield batch
+    else:
+        for i in id:
+            src_len, trg_len = lengths[i]
+            sz = max(max_src, max_trg, src_len, trg_len) * (cnt + 1)
+            if sz > n_tokens:
+                yield batch
+                batch, cnt = [], 0
+                max_src, max_trg = 0, 0
+            cnt += 1
+            max_src = max(max_src, src_len)
+            max_trg = max(max_trg, trg_len)
+            batch.append(i)
+        if len(batch) > 0:
+            yield batch
 
-def standard_batch(batch_size, id, lengths, keep_order=True):
+
+def standard_batch(batch_size, id, lengths, keep_order=False):
     if not keep_order:
         chunk = batch_size * 100
         for i in range(0, len(id), chunk):
-            id[i:i+chunk] = sorted(id[i:i+chunk], key=lambda x: lengths[x])
-    for i in range(0, len(id), batch_size):
-        yield id[i:i+batch_size]
+            p_id = sorted(id[i:i+chunk], \
+                key=lambda x: interleave_keys(*lengths[x]))
+            for j in range(0, len(p_id), batch_size):
+                yield id[j:j+batch_size]
+    else:
+        for i in range(0, len(id), batch_size):
+            yield id[i:i+batch_size]
+
 
 class EagerLoader(object):
     def __init__(self, corpora, n_tokens=None, batch_size=32, train=False):
@@ -95,7 +119,7 @@ class EagerLoader(object):
         n_sents = 0
         lengths, corpora, sents = [], [], []
         for corpus, stat in self.stat.items():
-            lengths += [max(k, v) for k, v in stat["lengths"]]
+            lengths += [(k, v) for k, v in stat["lengths"]]
             corpora.append(corpus)
             n_sents += stat["n_sents"]
         

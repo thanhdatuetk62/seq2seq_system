@@ -27,8 +27,9 @@ class DataController(object):
     
     def create_iter(self, loader):
         fields = [("src", self.src_field), ("trg", self.trg_field)]
+        examples = []
         for batch in loader:
-            examples = []
+            ex = []
             for (src, trg, corpus) in batch:
                 init_token = ""
                 if self.dataset == "bilingual":
@@ -37,8 +38,9 @@ class DataController(object):
                     trg_lang = corpus["trg_lang"]
                     init_token = "<{}>".format(trg_lang)
                 trg = (init_token + " " + trg).strip()
-                examples.append(Example.fromlist([src, trg], fields))
-            yield Batch(examples, fields, device=self.device)
+                ex.append(Example.fromlist([src, trg], fields))
+            examples += ex
+            yield Batch(ex, fields, device=self.device)
     
     def create_infer_iter(self, src_sents, batch_size=32, n_tokens=None):
         """
@@ -49,7 +51,7 @@ class DataController(object):
         for sent in src_sents:
             examples.append(Example.fromlist([sent], fields))
         id = [i for i in range(len(examples))]
-        lengths = [len(ex.src) for ex in examples]
+        lengths = [(len(ex.src), 0) for ex in examples]
         if n_tokens is not None:
             batches_id = dynamic_batch(n_tokens, id, lengths, keep_order=True)
         else:

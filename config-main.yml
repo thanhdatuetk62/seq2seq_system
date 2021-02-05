@@ -16,7 +16,7 @@ data_kwargs:
       - <en>
       - <vi>
 
-  
+
 model: transformer_nmt
 model_kwargs:
   # Architecture config
@@ -63,8 +63,8 @@ train_config:
 
   train_batch_sz: 64
   valid_batch_sz: 64
-  # train_n_tokens: 4069
-  # valid_n_tokens: 4069
+  train_n_tokens: 8000
+  valid_n_tokens: 8000
 
   optimizer: adam
   optimizer_kwargs:
@@ -83,7 +83,7 @@ train_config:
   loss_kwargs:
     label_smoothing: 0.1
 
-  n_epochs: 20
+  n_epochs: 30
   report_steps: 200
   valid_epochs: 1
   eval_epochs: 1
@@ -98,21 +98,21 @@ train_config:
     alpha: 0.6
     beta: 0.0
     support_kwargs:
-      use_actives: true
-      use_cache: false
+      use_actives: false
+      use_cache: true
 
 infer_config:
   strategy: beam_search
   batch_size: 32
-  n_tokens: 2048
+  n_tokens: 4096
   strategy_kwargs:
     k: 4
     max_len: 160
     alpha: 0.6
     beta: 0.0
-    # support_kwargs:
-    #   use_actives: true
-    #   use_cache: false
+    support_kwargs:
+      use_actives: false
+      use_cache: true
 
 device: cuda
 keep_checkpoints: 5

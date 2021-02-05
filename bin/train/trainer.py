@@ -233,7 +233,6 @@ class Trainer(nn.Module):
         for batch in iter:
             # Generate targe tokens
             sos_tokens = batch.trg[0]
-            x, y = batch.src[:, 0], batch.trg[:, 0]
             c = [self.data.convert_to_str(sent) 
                  for sent in self.strategy(batch.src, sos_tokens)]
             r = [[[self.data.trg_vocab.itos[j] for j in sent 
@@ -246,5 +245,5 @@ class Trainer(nn.Module):
             time_used = time.perf_counter() - start_time
             print_progress(n_sents, total_n_sents, max_len=40,
                            prefix="EVAL", suffix="DONE", time_used=time_used)
-        print(candidate_corpus[0], references_corpus[0][0])
-        return self.eval_metric(candidate_corpus, references_corpus)
+        torch.cuda.empty_cache()
+        return self.eval_metric(candidate_corpus, references_corpus) * 100.0

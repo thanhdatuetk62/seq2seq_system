@@ -5,8 +5,7 @@ import io
 import re
 
 from .train import Trainer
-from .forecast import find_forecast_strategy
-
+from .forecast import Forecaster
 
 class Controller(object):
     def __init__(self, device="cpu", save_dir='./run', keep_checkpoints=100):
@@ -56,14 +55,8 @@ class Controller(object):
             ckpt: (int) - Index of checkpoint to load
             ...
         """
-        strategy = infer_config["strategy"]
-        strategy_kwargs = infer_config["strategy_kwargs"]
-        batch_size = infer_config.get("batch_size", 32)
-        n_tokens = infer_config.get("n_tokens", None)
-        
-        forecaster = find_forecast_strategy(strategy)(controller=self, \
-            data_kwargs=data_kwargs, model=model, model_kwargs=model_kwargs, \
-            sos_token=sos_token, device=self.device, **strategy_kwargs)
+        forecaster = Forecaster(self, data_kwargs, model, model_kwargs, \
+            sos_token=sos_token, device=self.device, **infer_config)
         forecaster.to(self.device)
         # Load checkpoint
         ckpt_file = self._select_checkpoint(ckpt=ckpt)
@@ -72,8 +65,7 @@ class Controller(object):
             state_dict = torch.load(ckpt_file)
             forecaster.load_state_dict(state_dict)
             print("Done!")
-        forecaster.infer_from_file(src_path, save_path, batch_size=batch_size, \
-            n_tokens=n_tokens)
+        forecaster.infer_from_file(src_path, save_path)
 
     def compile(self, ckpt=None, export_path="export.pt", \
         strategy="beam_search", strategy_kwargs={}, **kwargs):

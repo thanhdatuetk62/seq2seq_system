@@ -92,7 +92,7 @@ class MultiAttention(nn.Module):
                 cache["q"] = _concate(cache["q"], zeros, dim=0)
                 cache["q"][-1, actives] = q
             else:
-                cache["q"][-1] = _concate(cache["q"], q, dim=0)
+                cache["q"] = _concate(cache["q"], q, dim=0)
             
             if is_self_attn:
                 if actives is not None:
@@ -102,8 +102,8 @@ class MultiAttention(nn.Module):
                     cache["v"][-1, actives] = v
                     k, v = cache["k"][:, actives], cache["v"][:, actives]
                 else:
-                    cache["k"][-1] = _concate(cache["k"], k, dim=0)
-                    cache["v"][-1] = _concate(cache["v"], v, dim=0)
+                    cache["k"] = _concate(cache["k"], k, dim=0)
+                    cache["v"] = _concate(cache["v"], v, dim=0)
                     k, v = cache["k"], cache["v"]
 
         q = q.contiguous().view(-1, n * n_heads, d_q).transpose(0, 1)
@@ -172,6 +172,7 @@ class EncoderLayer(nn.Module):
         Returns:
             (Tensor [N x S x d_model]) - Output tensor
         """
+        "=============================POST-NORM==============================="
         src_2, _ = self.multi_att(src, src, src, \
             key_padding_mask=src_key_padding_mask, \
             need_weights=False, attn_mask=src_mask)
@@ -181,6 +182,16 @@ class EncoderLayer(nn.Module):
         src_2 = self.linear_2(self.dropout(self.activation(self.linear_1(src))))
         src = src + self.dropout_2(src_2)
         src = self.norm_2(src)
+        "==============================PRE-NORM==============================="
+        # src_2 = self.norm_1(src)
+        # src_2, _ = self.multi_att(src_2, src_2, src_2, \
+        #     key_padding_mask=src_key_padding_mask, \
+        #     need_weights=False, attn_mask=src_mask)
+        # src = src + self.dropout_1(src_2)
+
+        # src_2 = self.norm_2(src)
+        # src_2 = self.linear_2(self.dropout(self.activation(self.linear_1(src_2))))
+        # src = src + self.dropout_2(src_2)
         return src
 
 
@@ -229,6 +240,7 @@ class DecoderLayer(nn.Module):
             self_attn = attn_cache["self_attn"]
             attn = attn_cache["attn"]
 
+        "=============================POST-NORM==============================="
         # Self-Attention layer
         trg_2 , _= self.multi_att_1(trg, trg, trg, \
             key_padding_mask=trg_key_padding_mask, \
@@ -250,6 +262,29 @@ class DecoderLayer(nn.Module):
         trg = trg + self.dropout_3(trg_2)
         trg = self.norm_3(trg)
 
+        "==============================PRE-NORM==============================="
+        # # Self-Attention layer
+        # trg_2 = self.norm_1(trg)
+        # trg_2 , _= self.multi_att_1(trg_2, trg_2, trg_2, \
+        #     key_padding_mask=trg_key_padding_mask, \
+        #     need_weights=False, attn_mask=trg_mask, \
+        #     cache=self_attn, actives=actives)
+        # trg = trg + self.dropout_1(trg_2)
+        
+
+        # # Encoder-Decoder Attention layer
+        # trg_2 = self.norm_2(trg)
+        # trg_2, score = self.multi_att_2(trg_2, memory, memory, \
+        #     key_padding_mask=memory_key_padding_mask, \
+        #     need_weights=need_weights, attn_mask=memory_mask, \
+        #     cache=attn, actives=actives)
+        # trg = trg + self.dropout_2(trg_2)
+
+        # # Feed Forward layer
+        # trg_2 = self.norm_3(trg)
+        # trg_2 = self.linear_2(self.dropout(self.activation(self.linear_1(trg_2))))
+        # trg = trg + self.dropout_3(trg_2)
+        
         return trg, score
 
 

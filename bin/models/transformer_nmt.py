@@ -92,7 +92,10 @@ class TransformerNMT(_Model):
             trg = trg[-1].unsqueeze(0)
         # Embedding target tokens
         trg = self.trg_embed(trg)
-        trg = self.pe(trg, pos=t-1)
+        if cache is not None:
+            trg = self.pe(trg, pos=t-1)
+        else:
+            trg = self.pe(trg)
 
         # Transformer output
         trg_mask = generate_subsequent_mask(trg.size(0), self.device)
@@ -176,13 +179,14 @@ class DecodeSupport(nn.Module):
         Arguments:
             i: (Tensor) - Indices of beams composed by batches
         """
-        if self.cache is not None:
+        if self.use_cache:
             for attn_cache in self.cache:
                 attn_cache["self_attn"]["q"] = attn_cache["self_attn"]["q"][:, i]
                 attn_cache["self_attn"]["k"] = attn_cache["self_attn"]["k"][:, i]
                 attn_cache["self_attn"]["v"] = attn_cache["self_attn"]["v"][:, i]
                 attn_cache["attn"]["q"] = attn_cache["attn"]["q"][:, i]
 
+    @torch.no_grad()
     def burn(self):
         """Initialization for the first timestep"""
         trg = self.sos_tokens.unsqueeze(0)
@@ -193,6 +197,7 @@ class DecodeSupport(nn.Module):
         self.reorder_beams(it)
         return prob
 
+    @torch.no_grad()
     def forward(self, trg):
         """
         Feed batch of target beams into Transformer decoder
@@ -210,12 +215,11 @@ class DecodeSupport(nn.Module):
             active_mask = (trg == self.eos_token).any(0).view(-1)
             actives = torch.nonzero(active_mask==0).view(-1)
         
-        probs = torch.zeros((n*k, self.model.trg_vocab_size), \
-            device=self.device, dtype=torch.float)
-        
         flatten_trg = trg.view(t, -1)
 
         if self.use_actives:
+            probs = torch.zeros((n*k, self.model.trg_vocab_size), \
+            device=self.device, dtype=torch.float)
             probs[actives] = self.model.decode(flatten_trg[:, actives], \
                 self.memories[:, actives], self.padding_masks[:, actives], \
                 self.cache, actives)
