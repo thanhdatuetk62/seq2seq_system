@@ -1,4 +1,5 @@
 from .beam_search import BeamSearch, BeamSearch2
+
 forecast_strategies = {
     "beam_search": BeamSearch,
     "beam_search_2": BeamSearch2

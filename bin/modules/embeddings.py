@@ -2,7 +2,7 @@ import torch, math
 from torch import nn
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model=512, fix_max_len=512, dropout=0.1):
+    def __init__(self, d_model=512, fix_max_len=5000, dropout=0.1):
         super(PositionalEncoding, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
         self.d_model = d_model

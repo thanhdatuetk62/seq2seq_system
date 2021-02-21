@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from .strategy import _Strategy
-from ...models import DecodeSupport
+from ..models import DecodeSupport
 
 
 class BeamSearch(_Strategy):

@@ -1,4 +1,4 @@
-from bin import Controller
+from bin import Portal
 
 import os
 import argparse
@@ -17,8 +17,9 @@ torch.manual_seed(0)
 parser = argparse.ArgumentParser(description="Commandline arguments for \
     running seq2seq system.")
 
-parser.add_argument("mode", type=str, choices=["train", "infer", "compile"], \
-    help="Choose type of using: [train], [infer], [compile]")
+parser.add_argument("mode", type=str, \
+    choices=["build_vocab", "train", "infer", "compile"], \
+    help="Choose type of using: [build_vocab], [train], [infer], [compile]")
 
 parser.add_argument("--config", type=str, default=None, \
     help="Path to config file in which contains hyperparameters")
@@ -35,12 +36,20 @@ parser.add_argument("--src_path", type=str, \
 parser.add_argument("--save_path", type=str, default="output.txt", \
     help="[infer] Path to save file which is result of inference")
 
-parser.add_argument("--sos_token", type=str, default=None, \
+parser.add_argument("--src_prefix", type=str, default="", \
+    help="[infer] Start of sequence source token")
+
+parser.add_argument("--trg_prefix", type=str, default="<sos>", \
     help="[infer] Start of sequence target token")
+
+parser.add_argument("--batch_size", type=int, default=64, \
+    help="[infer] Number of sentence per batch")
+
+parser.add_argument("--n_tokens", type=int, default=None, \
+    help="[infer] Number of tokens per batch")
 
 parser.add_argument("--export_path", type=str, default="export.pt", \
     help="[compile] Path to save TorchScript")
-
 
 def main():
     # Parse arguments from standard input
@@ -55,21 +64,19 @@ def main():
                   .format(args.config))
     else:
         print("Using default config.")
-    controller = Controller(device=options.get("device", "cpu"), \
-        save_dir=options.get("save_dir", "run"), \
-        keep_checkpoints=options.get("keep_checkpoints", 100))
+    portal = Portal(save_dir=args.save_dir, **options)
+    if args.mode == "build_vocab":
+        portal.build_vocab()
     if args.mode == "train":
-        controller.train(ckpt=args.checkpoint, **options)
+        portal.train(ckpt=args.checkpoint)
     if args.mode == "infer":
-        controller.infer(src_path=args.src_path,
-                         save_path=args.save_path, 
-                         sos_token=args.sos_token,
-                         ckpt=args.checkpoint, **options)
+        portal.infer(src_path=args.src_path, save_path=args.save_path, \
+            src_prefix=args.src_prefix, trg_prefix=args.trg_prefix,
+            ckpt=args.checkpoint)
     if args.mode == "compile":
         infer_config = options.get("infer_config", {})
-        controller.compile(ckpt=args.checkpoint, \
+        portal.compile(ckpt=args.checkpoint, \
             export_path=args.export_path, **infer_config)
-
 
 if __name__ == "__main__":
     # Suppress Warning

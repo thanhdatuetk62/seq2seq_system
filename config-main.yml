@@ -1,25 +1,25 @@
-data_kwargs:
-  dataset: multilingual
-  
-  build_vocab_kwargs:
-    src_min_freq: 2
-    trg_min_freq: 2
-    # src_max_size: 8000
-    # trg_max_size: 8000
-    src_specials: 
-      - <pad>
-      - <unk>
-    trg_specials:
-      - <pad>
-      - <unk>
-      - <eos>
-      - <en>
-      - <vi>
-
+build_vocab_config:
+  src_paths:
+    - /home/datnt/data/en_vi_IWSLT/train.clean.en
+  trg_paths:
+    - /home/datnt/data/en_vi_IWSLT/train.clean.vi
+  src_min_freq: 2
+  trg_min_freq: 2
+  # src_max_size: 32000
+  # trg_max_size: 32000
+  src_specials: 
+    - <pad>
+    - <unk>
+  trg_specials:
+    - <pad>
+    - <unk>
+    - <sos>
+    - <eos>
 
 model: transformer_nmt
-model_kwargs:
+model_config:
   # Architecture config
+  share_embed: false
   d_model: 512
   nhead: 8
   num_encoder_layers: 6
@@ -28,43 +28,31 @@ model_kwargs:
   dropout: 0.1
   activation: relu
   max_input_length: 200
-  
 
 # Config for training
 train_config:
   lazy: false
-  cache_lines: 1e6
-
-  train_ds_kwargs:
-    en_vi:
+  train_loader:
+    batch_size: 64
+    # n_tokens: 4000
+    en_vi_IWSLT:
       src_lang: en
       trg_lang: vi
-      src_path: ../data/iwslt_en_vi/train.en
-      trg_path: ../data/iwslt_en_vi/train.vi 
+      # src_prefix: <en> # (default: "")
+      # trg_prefix: <vi> # (default: <sos>)
       src_max_len: 64
       trg_max_len: 64
-    # vi_en:
-    #   src_lang: vi
-    #   trg_lang: en
-    #   src_path: ../data/iwslt_en_vi/train.vi
-    #   trg_path: ../data/iwslt_en_vi/train.en 
-    #   src_max_len: 64
-    #   trg_max_len: 64
+      path: /home/datnt/data/en_vi_IWSLT/train.clean
 
-  valid_ds_kwargs:
-    en_vi:
+  valid_loader:
+    batch_size: 64
+    # n_tokens: 4000
+    en_vi_IWSLT:
       src_lang: en
       trg_lang: vi
-      src_path: ../data/iwslt_en_vi/tst2013.en
-      trg_path: ../data/iwslt_en_vi/tst2013.vi
-    # vi_en:
-    #   src_path: ../data/iwslt_en_vi/tst2013.vi
-    #   trg_path: ../data/iwslt_en_vi/tst2013.en
+      path: /home/datnt/data/en_vi_IWSLT/tst2013.clean
 
-  train_batch_sz: 64
-  valid_batch_sz: 64
-  train_n_tokens: 8000
-  valid_n_tokens: 8000
+  accum_steps: 1
 
   optimizer: adam
   optimizer_kwargs:
@@ -75,7 +63,7 @@ train_config:
 
   scheduler: noam
   scheduler_kwargs:
-    scalar: 0.2
+    scalar: 1.0
     warmup_steps: 4000
     d_model: 512
   
@@ -83,36 +71,28 @@ train_config:
   loss_kwargs:
     label_smoothing: 0.1
 
-  n_epochs: 30
-  report_steps: 200
+  n_epochs: 50
+  # n_steps: 50000
+  report_steps: 100
   valid_epochs: 1
+  valid_steps: 1000
   eval_epochs: 1
+  eval_steps: 1000
   save_checkpoint_epochs: 1
-  use_float32: true
+  save_checkpoint_steps: 2000
+  use_float32: false
 
   eval_metric: bleu
-  strategy: beam_search
-  strategy_kwargs:
-    k: 4
-    max_len: 160
-    alpha: 0.6
-    beta: 0.0
-    support_kwargs:
-      use_actives: false
-      use_cache: true
 
-infer_config:
-  strategy: beam_search
-  batch_size: 32
-  n_tokens: 4096
-  strategy_kwargs:
-    k: 4
-    max_len: 160
-    alpha: 0.6
-    beta: 0.0
-    support_kwargs:
-      use_actives: false
-      use_cache: true
+strategy: beam_search
+strategy_config:
+  k: 4
+  max_len: 160
+  alpha: 0.6
+  beta: 0.0
+  support_kwargs:
+    use_actives: false
+    use_cache: true
 
 device: cuda
-keep_checkpoints: 5
+keep_checkpoints: 10

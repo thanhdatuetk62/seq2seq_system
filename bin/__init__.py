@@ -1,1 +1,1 @@
-from .controller import Controller
+from .portal import Portal

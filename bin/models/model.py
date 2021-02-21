@@ -2,14 +2,14 @@ from torch import nn
 import torch
 
 class _Model(nn.Module):
-    def __init__(self, data, device="cpu"):
+    def __init__(self, portal, device="cpu"):
         super().__init__()
-        self.data = data
+        self.portal = portal
         self.device = device
 
         # Reveal some data info
-        self.src_vocab_size = len(data.src_vocab)
-        self.trg_vocab_size = len(data.trg_vocab)
+        self.src_vocab_size = len(portal.src_vocab)
+        self.trg_vocab_size = len(portal.trg_vocab)
 
         print("Source vocab size: ", self.src_vocab_size)
         print("Target vocab size: ", self.trg_vocab_size)

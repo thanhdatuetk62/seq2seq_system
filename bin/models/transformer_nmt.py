@@ -12,15 +12,20 @@ from ..utils import generate_subsequent_mask
 class TransformerNMT(_Model):
     def __init__(self, d_model=512, nhead=8, activation="relu",
                  num_encoder_layers=6, num_decoder_layers=6,  dim_ff=2048,
-                 dropout=0.1, max_input_length=100, **kwargs):
+                 dropout=0.1, max_input_length=100, share_embed=False, **kwargs):
         super().__init__(**kwargs)
         self.max_len = max_input_length
         self.d_model = d_model
         self.n_heads = nhead
 
         # Create embedding layer for both Encoder and Decoder
-        self.src_embed = nn.Embedding(self.src_vocab_size, d_model)
-        self.trg_embed = nn.Embedding(self.trg_vocab_size, d_model)
+        if share_embed:
+            vocab_size = self.portal.share_vocab()
+            self.src_vocab_size = self.trg_vocab_size = vocab_size
+            self.src_embed = self.trg_embed = nn.Embedding(vocab_size, d_model)
+        else:
+            self.src_embed = nn.Embedding(self.src_vocab_size, d_model)
+            self.trg_embed = nn.Embedding(self.trg_vocab_size, d_model)
 
         # Positional Encoding module
         self.pe = PositionalEncoding(d_model=d_model, dropout=dropout)
@@ -45,7 +50,7 @@ class TransformerNMT(_Model):
         Returns:
             (Tensor [T x N x trg_vocab_size]) - Score distributions
         """
-        pad_token = self.data.src_vocab.stoi["<pad>"]
+        pad_token = self.portal.src_vocab.stoi["<pad>"]
         # Masks
         trg_mask = generate_subsequent_mask(trg.size(0), self.device)
         src_key_padding_mask = memory_key_padding_mask = (src == pad_token).t()
@@ -72,7 +77,7 @@ class TransformerNMT(_Model):
         Arguments:
             src: (Tensor [S x N])
         """
-        pad_token = self.data.src_vocab.stoi["<pad>"]
+        pad_token = self.portal.src_vocab.stoi["<pad>"]
         src_key_padding_mask = memory_key_padding_mask = (src == pad_token).t()
 
         # Embedding source tokens

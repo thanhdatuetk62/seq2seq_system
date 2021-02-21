@@ -1,166 +1,132 @@
 import io
-from torchtext.data import Batch, interleave_keys
+import linecache
+from os import stat
+import random
+from torchtext.data import Batch, interleave_keys, Example
+from torchtext.data.iterator import batch
 from torchtext.vocab import Vocab
 from random import shuffle
 from collections import Counter
 
-def _filter(src, trg, src_max_len=None, trg_max_len=None):
-    """
-    Create filter_pred function for filtering out sentences \
-        whose length are greater than {max_len}. 
-    
-    Returns a callable max_len specified filter function
-    """
-    src_len = len(src.split())
-    trg_len = len(trg.split())
-    return (src_max_len is None or (src_len <= src_max_len)) \
-        and (trg_max_len is None or (trg_len <= trg_max_len))
-
-def _statistic(corpus):
-    """Get stats from parallel corpus"""
-    n_sents = 0
-    lengths = []
-    with io.open(corpus["src_path"], "r", encoding="utf-8") as sf, \
-         io.open(corpus["trg_path"], "r", encoding="utf-8") as tf:
-        for s, t in zip(sf, tf):
-            s = s.strip()
-            t = t.strip()
-            src_max_len = corpus.get("src_max_len", None)
-            trg_max_len = corpus.get("trg_max_len", None)
-            if s != "" and t != "" and _filter(s, t, src_max_len, trg_max_len):
-                lengths.append((len(s.split()), len(t.split())))
-                n_sents += 1
-    return {"n_sents": n_sents, "lengths": lengths}
+from .io_handlers import load_bitext, load_monotext
+from .utils import standard_batch, dynamic_batch, statistic
 
 
-def dynamic_batch(n_tokens, id, lengths, keep_order=False):
-    batch, cnt = [], 0
-    max_src, max_trg = 0, 0
-    if not keep_order:
-        chunk = 10000
-        for i in range(0, len(id), chunk):
-            p_id = sorted(id[i:i+chunk], \
-                key=lambda x: interleave_keys(*lengths[x]))
-            for i in p_id:
-                src_len, trg_len = lengths[i]
-                sz = max(max_src, max_trg, src_len, trg_len) * (cnt + 1)
-                if sz > n_tokens:
-                    yield batch
-                    batch, cnt = [], 0
-                    max_src, max_trg = 0, 0
-                cnt += 1
-                max_src = max(max_src, src_len)
-                max_trg = max(max_trg, trg_len)
-                batch.append(i)
-            if len(batch) > 0:
-                yield batch
-    else:
-        for i in id:
-            src_len, trg_len = lengths[i]
-            sz = max(max_src, max_trg, src_len, trg_len) * (cnt + 1)
-            if sz > n_tokens:
-                yield batch
-                batch, cnt = [], 0
-                max_src, max_trg = 0, 0
-            cnt += 1
-            max_src = max(max_src, src_len)
-            max_trg = max(max_trg, trg_len)
-            batch.append(i)
-        if len(batch) > 0:
-            yield batch
-
-
-def standard_batch(batch_size, id, lengths, keep_order=False):
-    if not keep_order:
-        chunk = batch_size * 100
-        for i in range(0, len(id), chunk):
-            p_id = sorted(id[i:i+chunk], \
-                key=lambda x: interleave_keys(*lengths[x]))
-            for j in range(0, len(p_id), batch_size):
-                yield id[j:j+batch_size]
-    else:
-        for i in range(0, len(id), batch_size):
-            yield id[i:i+batch_size]
+class Batch(object):
+    def __init__(self, data, fields, device="cpu"):
+        self.batch_size = len(data)
+        for name, field in fields:
+            if field is not None:
+                batch = [getattr(x, name) for x in data]
+                setattr(self, name, field.process(batch, device=device))
 
 
 class EagerLoader(object):
-    def __init__(self, corpora, n_tokens=None, batch_size=32, train=False):
+    def __init__(self, fields, batch_size=32, n_tokens=None, train=False, \
+        sampling=False, device="cpu", bitext=True, **corpora):
+        self.fields = fields
+        self.device = device
+        self.sampling = sampling
         self.corpora = corpora
         self.train = train
         self.n_tokens = n_tokens
         self.batch_size = batch_size
-        self.stat = {k: _statistic(v) for k, v in corpora.items()}
-    
-    def build_vocab(self, src_min_freq=1, trg_min_freq=1, src_max_size=None, \
-        trg_max_size=None, src_specials=("<unk>", "<pad>"), \
-        trg_specials=("<unk>", "<pad>")):
+        self.bitext = bitext
 
-        print("Building vocab ...")
-        src_cnt, trg_cnt = Counter(), Counter()
+        # Gather and compose corpora together (for further actions)
+        self.n_sents = 0
+        self.owner = []
+        self.lengths = []
+        self.probs = []
+        self.line_id = []
+        for name, corpus in corpora.items():
+            stats = statistic(name, corpus, bitext)
+            self.lengths += stats["lengths"]
+            self.n_sents += stats["n_sents"]
+            self.probs += [stats["weight"] / stats["n_sents"]] * stats["n_sents"]
+            self.owner += [name] * stats["n_sents"]
+            self.line_id += stats["line_id"]
+
+        # this method is implemented differently depend on loader type
+        self.prepare()
+    
+    def prepare(self):
+        self.sents = []
         for name, corpus in self.corpora.items():
-            print("Loading corpus {} ...".format(name), end=' ', flush=True)
-            with io.open(corpus["src_path"], "r", encoding="utf-8") as sf, \
-                 io.open(corpus["trg_path"], "r", encoding="utf-8") as tf:
-                for s, t in zip(sf, tf):
-                    s = s.strip()
-                    t = t.strip()
-                    if s != "" and t != "":
-                        src_cnt.update(s.split())
-                        trg_cnt.update(t.split())
-            print("Done!")
-        src_vocab = Vocab(src_cnt, src_max_size, src_min_freq, src_specials)
-        trg_vocab = Vocab(trg_cnt, trg_max_size, trg_min_freq, trg_specials)
-        return src_vocab, trg_vocab
+            if self.bitext:
+                for s, t, i in load_bitext(**corpus):
+                    self.sents.append((s, t))
+            else:
+                for s, i in load_monotext(**corpus):
+                    self.sents.append(s)
+    
+    def get_line(self, i):
+        return self.sents[i]
 
     def __len__(self):
-        return sum([stat["n_sents"] for _, stat in self.stat.items()])
+        return self.n_sents
 
     def __iter__(self):
-        n_sents = 0
-        lengths, corpora, sents = [], [], []
-        for corpus, stat in self.stat.items():
-            lengths += [(k, v) for k, v in stat["lengths"]]
-            corpora.append(corpus)
-            n_sents += stat["n_sents"]
-        
-        print("\x1b[1K\rIterate over corpora in Eager mode", flush=True)
-        for name, corpus in self.corpora.items():
-            with io.open(corpus["src_path"], "r", encoding="utf-8") as sf, \
-                 io.open(corpus["trg_path"], "r", encoding="utf-8") as tf:
-                for i, (s, t) in enumerate(zip(sf, tf)):
-                    s = s.strip()
-                    t = t.strip()
-                    src_max_len = corpus.get("src_max_len", None)
-                    trg_max_len = corpus.get("trg_max_len", None)
-                    if s != "" and t != "" and _filter(s, t, src_max_len, trg_max_len):
-                        sents.append((s, t, corpus))
-        
-        id = [i for i in range(n_sents)]
-        if self.train:
+        print("Iterate over corpora in Eager mode")
+        id = [i for i in range(self.n_sents)]
+
+        # Shuffle if loading for training and not using sampling
+        if self.train and not self.sampling:
             shuffle(id)
+        
+        batch_method = standard_batch
+        batch_size = self.batch_size
+        use_sampling = (self.train and self.sampling)
+        use_sort = (not self.train)
 
         if self.n_tokens is not None:
-            for batch_id in dynamic_batch(self.n_tokens, id, lengths):
-                batch = [sents[i] for i in batch_id]
-                yield batch
-        else:
-            for batch_id in standard_batch(self.batch_size, id, lengths):
-                batch = [sents[i] for i in batch_id]
-                yield batch
-
-
-class LazyLoader(object):
-    def __init__(self, corpora):
-        self.corpora = corpora
-        self.train_stat = {k: _statistic(v, get_length=True) \
-            for k, v in corpora.items()}
+            batch_method = dynamic_batch
+            batch_size = self.n_tokens
         
-    def _load_bilingual_examples(corpora):
-        examples, specials = [], {}
-        for name, corpus in corpora:
-            print("Loading corpus {}".format(corpus))
-            with io.open(corpus["src_path"], "r", encoding="utf-8") as f:
-                print("?")
+        for batch_id in batch_method(batch_size, id, self.lengths, \
+            self.probs, sort=use_sort, sampling=use_sampling):
+            batch, pos = [], []
+            for i in batch_id:
+                corpus = self.corpora[self.owner[i]]
+                pos.append((self.line_id[i], self.owner[i]))
 
-    def _load_multilingual_examples(corpora):
-        specials = {}
+                if self.bitext:
+                    # Add prefix in sentence if needed
+                    src_prefix = corpus.get("src_prefix", "")
+                    trg_prefix = corpus.get("trg_prefix", "<sos>")
+
+                    # Get sentence based on this id
+                    src, trg = self.get_line(i)
+                    src = (src_prefix + " " + src).strip()
+                    trg = (trg_prefix + " " + trg).strip()
+
+                    # Add it to the batch list
+                    batch.append(Example.fromlist([src, trg], self.fields))
+                else:
+                    # Add prefix in sentence if needed
+                    src_prefix = corpus.get("src_prefix", "")
+
+                    # Get sentence based on this id
+                    src = self.get_line(i)
+                    src = (src_prefix + " " + src).strip()
+
+                    # Add it to the batch list
+                    batch.append(Example.fromlist([src], self.fields))
+            
+            # Convert to Tensor
+            yield Batch(batch, self.fields, device=self.device), pos
+
+
+class LazyLoader(EagerLoader):
+
+    def prepare(self):
+        "No need to prepare in lazy mode"
+        return
+
+    def getline(self, i):
+        corpus = self.corpora[self.owner[i]]
+        src_path = corpus["path"] + '.' + corpus["src_lang"]
+        trg_path = corpus["path"] + '.' + corpus["trg_lang"]
+        src = linecache.getline(src_path, self.line_id[i])
+        trg = linecache.getline(trg_path, self.line_id[i])
+        return src, trg
